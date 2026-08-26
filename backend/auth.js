@@ -136,11 +136,29 @@ router.get('/discord/callback', async (req, res) => {
       { headers: { Authorization: `Bearer ${accessToken}` }, validateStatus: (s) => s < 500 }
     );
 
-    if (memberRes.status === 404) return res.redirect(`${APP_URL}?auth=not_member`);
+    if (memberRes.status === 404) {
+      // They completed the Discord login but aren't in THIS server. The most
+      // common cause by far is the wrong DISCORD_GUILD_ID — a login that works
+      // for the organizer who set it up and nobody else usually means the ID
+      // points at a server only they are in.
+      console.warn(`Login refused: user is not a member of guild ${DISCORD_GUILD_ID} (auth=not_member)`);
+      return res.redirect(`${APP_URL}?auth=not_member`);
+    }
     if (memberRes.status !== 200) throw new Error(`member fetch failed: ${memberRes.status}`);
 
     const sessionUser = evaluateMember(memberRes.data);
-    if (!sessionUser) return res.redirect(`${APP_URL}?auth=forbidden`);
+    if (!sessionUser) {
+      // Refusals used to be silent, which made "someone couldn't sign in"
+      // unanswerable without reproducing it. The role IDs are not secret and
+      // this is the one place the mismatch is visible.
+      const held = memberRes.data?.roles || [];
+      console.warn(
+        `Login refused: DISCORD_ALLOWED_ROLE_IDS is set to [${ALLOWED_ROLE_IDS.join(', ')}] `
+        + `and this member holds [${held.join(', ')}] — no overlap (auth=forbidden). `
+        + 'Leave DISCORD_ALLOWED_ROLE_IDS empty to let any member of the server sign in.'
+      );
+      return res.redirect(`${APP_URL}?auth=forbidden`);
+    }
 
     // Mark them verified in Discord. Deliberately AFTER the access check —
     // someone whose roles don't admit them to the site shouldn't be tagged as
@@ -152,9 +170,33 @@ router.get('/discord/callback', async (req, res) => {
     issueSession(res, sessionUser);
     res.redirect(APP_URL);
   } catch (err) {
-    console.error('Auth callback error:', err.message);
+    // Nearly always one of three things, and the raw message rarely says which.
+    const hint = /invalid_grant|invalid_client|redirect_uri/i.test(err.message || '')
+      ? ' — check DISCORD_REDIRECT_URI matches the redirect registered on the Discord application, exactly'
+      : '';
+    console.error(`Auth callback error (auth=error): ${err.message}${hint}`);
     res.redirect(`${APP_URL}?auth=error`);
   }
+});
+
+// ── Why can't someone sign in? ──────────────────────────────────────────────
+// Public and deliberately free of secrets: booleans, counts and the guild id,
+// which is not sensitive. It exists because the answer to "someone got refused"
+// is usually a configuration fact the organizer can check in five seconds, and
+// without this the only way to find it is to reproduce the failure.
+router.get('/config', (req, res) => {
+  res.json({
+    configured: authConfigured,
+    guild_id: DISCORD_GUILD_ID || null,
+    redirect_uri: DISCORD_REDIRECT_URI || null,
+    // The usual culprit. TRUE means only holders of those roles may sign in —
+    // everyone else is refused with auth=forbidden.
+    allow_list_active: ALLOWED_ROLE_IDS.length > 0,
+    allow_list_size: ALLOWED_ROLE_IDS.length,
+    organizer_roles_set: ADMIN_ROLE_IDS.length > 0,
+    bot_configured: botConfigured,
+    verified_role_set: !!VERIFIED_ROLE_ID,
+  });
 });
 
 // ── Who am I? ───────────────────────────────────────────────────────────────
