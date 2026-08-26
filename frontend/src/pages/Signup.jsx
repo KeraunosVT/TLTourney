@@ -165,7 +165,10 @@ export default function Signup() {
 
       {locked && (
         <div className="mb-4">
-          <Note tone="bad">{closedReason} Your entry is read-only from here.</Note>
+          <Note tone="bad">
+            {closedReason}
+            {signup ? ' Your entry is read-only from here.' : ''}
+          </Note>
         </div>
       )}
       {banner && <div className="mb-4"><Note tone={banner.tone}>{banner.text}</Note></div>}
@@ -360,15 +363,21 @@ export default function Signup() {
             <Steps signup={signup} />
           </Panel>
 
-          {pool && (
+          {/* Optional-chained throughout. The panel is context, not the point
+              of the page — it must never be the reason the form won't render. */}
+          {pool?.counts && (
             <Panel title="The pool" right={<span className="text-xs text-ash">right now</span>}>
               <div className="p-3.5 grid grid-cols-2 gap-2.5">
-                <Tile label="Signed up" value={pool.counts.total} note={`${pool.counts.pending} awaiting review`} />
-                <Tile label="On the board" value={pool.counts.approved} note="approved and draftable" />
+                <Tile
+                  label="Signed up"
+                  value={pool.counts.total ?? 0}
+                  note={`${pool.counts.pending ?? 0} awaiting review`}
+                />
+                <Tile label="On the board" value={pool.counts.approved ?? 0} note="approved and draftable" />
               </div>
               <div className="px-3.5 pb-4">
                 <div className="eyebrow mb-2">Most-signed weapons</div>
-                <WeaponBars weapons={pool.weapons} />
+                <WeaponBars weapons={pool.weapons || []} />
               </div>
             </Panel>
           )}

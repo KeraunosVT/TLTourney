@@ -36,11 +36,27 @@ app.use(cookieParser());
 // ── Health & public info ────────────────────────────────────────────────────
 // No auth: this is what a load balancer hits, and what tells the login page
 // which tournament it is inviting people to.
-app.get('/api/health', (req, res) => res.json({
-  status: 'ok',
-  auth: authConfigured,
-  db: !!supabase,
-}));
+// `db` used to report whether credentials were PRESENT, which is not the same
+// question as whether the database works — a correctly configured connection to
+// a project with no tables reported db:true while every page failed. It now
+// probes for real, so this one URL distinguishes "not configured" from
+// "configured but the migration hasn't been run".
+app.get('/api/health', async (req, res) => {
+  const out = { status: 'ok', auth: authConfigured, db: !!supabase };
+
+  if (supabase) {
+    const { error } = await supabase.from('tournaments').select('id').limit(1);
+    out.schema = !error;
+    if (error) {
+      out.status = 'degraded';
+      out.hint = /schema cache|does not exist|relation/i.test(error.message)
+        ? 'Tables are missing — run migrations/001_signups.sql in the Supabase SQL editor, then migrations/verify.sql.'
+        : error.message;
+    }
+  }
+
+  res.json(out);
+});
 
 app.get('/api/tournament', async (req, res) => {
   const t = await currentTournament();

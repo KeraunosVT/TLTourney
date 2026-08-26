@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, NavLink, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
+import { useLocation } from 'react-router-dom';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Queue from './pages/Queue';
@@ -37,7 +39,11 @@ function Shell() {
         </div>
       </nav>
       <main className="flex-1 min-w-0">
-        <Outlet />
+        {/* Keyed on the path so navigating away from a crashed page clears the
+            boundary — without the key it latches and every route stays broken. */}
+        <ErrorBoundary key={useLocation().pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
     </div>
   );

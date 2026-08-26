@@ -30,10 +30,25 @@ function closedReason(t) {
 // Public to anyone logged in. Counts only, never the roster: before the draft,
 // who has signed up is exactly the information captains would like to have
 // early, and there is no reason to hand it to them.
+// One shape, always — tournament or no tournament.
+//
+// This used to return a bare `{ tournament: null }` when nothing was running.
+// That object is TRUTHY on the client, so the page passed its `pool &&` guard,
+// rendered the pool panel, and died on `pool.counts.total` — taking the whole
+// page down before it could show the "no tournament is running" message that
+// would have explained the problem. A route with two shapes is a route with
+// two contracts, and callers only ever remember one of them.
+const emptyPool = () => ({
+  tournament: null,
+  counts: { total: 0, approved: 0, pending: 0 },
+  weapons: WEAPONS.map((w) => ({ weapon: w, count: 0 })),
+  classes: [],
+});
+
 router.get('/pool', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
   const t = await currentTournament();
-  if (!t) return res.json({ tournament: null });
+  if (!t) return res.json(emptyPool());
 
   const { data, error } = await supabase
     .from('player_signups')
