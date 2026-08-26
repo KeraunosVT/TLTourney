@@ -68,4 +68,48 @@ select '002 · positions count is capped',
 union all
 select '002 · positions gin index',
        exists (select 1 from pg_indexes
-               where schemaname = 'public' and indexname = 'player_signups_positions_idx');
+               where schemaname = 'public' and indexname = 'player_signups_positions_idx')
+union all
+-- ── 003 ────────────────────────────────────────────────────────────────────
+select '003 · roster_size is GENERATED, not editable',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'tournaments'
+                 and column_name = 'roster_size' and is_generated = 'ALWAYS')
+union all
+select '003 · roster is 8 x 6 + 12 = 60',
+       (select party_count = 8 and party_size = 6 and sub_count = 12 and roster_size = 60
+          from tournaments order by created_at limit 1)
+union all
+-- ── 004 ────────────────────────────────────────────────────────────────────
+select '004 · teams table',
+       to_regclass('public.teams') is not null
+union all
+select '004 · one captain cannot hold two teams',
+       exists (select 1 from pg_indexes
+               where schemaname = 'public' and indexname = 'teams_captain_unique')
+union all
+select '004 · seeds are unique where set',
+       exists (select 1 from pg_indexes
+               where schemaname = 'public' and indexname = 'teams_seed_unique')
+union all
+-- ── 005 ────────────────────────────────────────────────────────────────────
+-- The one most likely to be half-applied: 004's earlier draft created this
+-- column as text[], and `add column if not exists` would not have replaced it.
+-- jsonb here is the pass; ARRAY means 005 has not run.
+select '005 · party_template is jsonb (NOT text[])',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'tournaments'
+                 and column_name = 'party_template' and data_type = 'jsonb')
+union all
+select '005 · template describes 8 parties',
+       (select jsonb_array_length(party_template) = 8 from tournaments order by created_at limit 1)
+union all
+select '005 · template has 48 starting slots',
+       (select (select sum(jsonb_array_length(p->'slots'))
+                  from jsonb_array_elements(party_template) p) = 48
+          from tournaments order by created_at limit 1)
+union all
+-- Healer, not Support — the signup form stores Healer, and a slot the form can
+-- never satisfy is a slot that silently stays empty forever.
+select '005 · template says Healer, not Support',
+       (select party_template::text not like '%Support%' from tournaments order by created_at limit 1);
