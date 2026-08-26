@@ -200,12 +200,28 @@ router.put('/tournament', async (req, res) => {
   if (req.body?.signups_close_at !== undefined) {
     patch.signups_close_at = req.body.signups_close_at || null;
   }
+  // roster_size is NOT writable — it is generated in the database as
+  // party_count * party_size + sub_count (migration 003). Accepting it here
+  // would let the total disagree with the parts it is supposed to be the sum
+  // of, and nothing downstream could tell which of the two was meant.
   if (req.body?.roster_size !== undefined) {
-    const n = Number(req.body.roster_size);
-    if (!Number.isInteger(n) || n < 1 || n > 20) {
-      return res.status(400).json({ error: 'Roster size is a whole number between 1 and 20.' });
+    return res.status(400).json({
+      error: 'Roster size is worked out from the parties and subs — set party_count, party_size or sub_count instead.',
+    });
+  }
+
+  const STRUCTURE = {
+    party_count: [1, 24, 'Parties per team'],
+    party_size: [1, 12, 'Players per party'],
+    sub_count: [0, 60, 'Substitutes'],
+  };
+  for (const [key, [lo, hi, label]] of Object.entries(STRUCTURE)) {
+    if (req.body?.[key] === undefined) continue;
+    const n = Number(req.body[key]);
+    if (!Number.isInteger(n) || n < lo || n > hi) {
+      return res.status(400).json({ error: `${label} must be a whole number between ${lo} and ${hi}.` });
     }
-    patch.roster_size = n;
+    patch[key] = n;
   }
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nothing to change.' });
 
