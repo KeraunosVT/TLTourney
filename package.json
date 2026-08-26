@@ -8,7 +8,9 @@
     "test": "node --test \"backend/test/*.test.js\"",
     "dev:api": "cd backend && npm start",
     "dev:web": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build",
-    "postinstall": "cd backend && npm install && cd ../frontend && npm install"
+    "_comment_build": "Installs both halves itself rather than trusting postinstall. A host that runs `npm install --ignore-scripts` (several do) skips postinstall silently, and the failure surfaces much later as `vite: not found` at build time, or `Cannot find module 'express'` at boot. Repeating an install that already happened costs a few seconds; not doing one costs the deploy.",
+    "_comment_include_dev": "--include=dev is load-bearing on the frontend install. vite, tailwind, postcss and autoprefixer are devDependencies, and npm SKIPS devDependencies whenever NODE_ENV=production — which it is on the live host, because the server needs it for secure cookies. Without this flag the deploy installs the frontend's runtime deps, then dies on `vite: not found` with a NODE_ENV nobody thinks to blame.",
+    "build": "npm install --prefix backend --omit=dev && npm install --include=dev --prefix frontend && npm --prefix frontend run build",
+    "postinstall": "npm install --prefix backend && npm install --prefix frontend"
   }
 }
