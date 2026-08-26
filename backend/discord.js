@@ -60,6 +60,42 @@ async function listRoles() {
   }
 }
 
+// Give a member a role.
+//
+// Idempotent by nature: Discord answers 204 whether or not they already had it,
+// so there is no need to read the member first and no harm in it running on
+// every login.
+//
+// NEVER throws. Handing out a role is a side effect of signing in; a login that
+// failed because a role couldn't be granted would lock people out of the site
+// over something cosmetic. The caller gets a result object and ignores it.
+async function addRole(userId, roleId) {
+  if (!botConfigured) return { ok: false, reason: 'no bot token' };
+  if (!roleId) return { ok: false, reason: 'no role configured' };
+  try {
+    await axios.put(
+      `${API}/guilds/${GUILD_ID}/members/${userId}/roles/${roleId}`,
+      null,
+      { headers: authHeaders() }
+    );
+    return { ok: true };
+  } catch (err) {
+    const status = err.response?.status;
+    const code = err.response?.data?.code;
+    // 50013 "Missing Permissions" on a role grant is usually NOT a missing
+    // permission — it's hierarchy: the bot's own highest role sits below the
+    // role it's trying to hand out. Discord reports both cases identically, so
+    // name both rather than sending someone to check only the one that's fine.
+    const reason = status === 403 || code === 50013
+      ? `Missing Permissions. Two things to check: the bot needs "Manage Roles", AND its own role must sit ABOVE role ${roleId} in Server Settings → Roles.`
+      : status === 404
+        ? `Role ${roleId} does not exist in this server, or the member has left.`
+        : (err.response?.data?.message || err.message);
+    console.warn(`Role grant failed (user ${userId} → role ${roleId}): ${reason}`);
+    return { ok: false, reason };
+  }
+}
+
 // DM a member. Used to tell someone their signup was approved or rejected —
 // a decision that reaches nobody may as well not have been made.
 //
@@ -88,4 +124,4 @@ async function sendDM(userId, content) {
   }
 }
 
-module.exports = { fetchMember, listRoles, sendDM, botConfigured, GUILD_ID };
+module.exports = { fetchMember, listRoles, addRole, sendDM, botConfigured, GUILD_ID };

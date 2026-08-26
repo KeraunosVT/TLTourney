@@ -4,7 +4,7 @@
 // runs the tournament. Each decision is audit-logged and DMed.
 const express = require('express');
 const { supabase, currentTournament, invalidateTournament, audit } = require('./db');
-const { sendDM, listRoles, botConfigured } = require('./discord');
+const { sendDM, listRoles, fetchMember, botConfigured } = require('./discord');
 
 const router = express.Router();
 
@@ -232,6 +232,74 @@ router.get('/roles', async (req, res) => {
     res.json({ roles: await listRoles(), configured: botConfigured });
   } catch (err) {
     res.status(502).json({ error: err.message });
+  }
+});
+
+// ── Is the sign-in role actually grantable? ─────────────────────────────────
+// Discord reports "bot lacks Manage Roles" and "bot's role is below the target
+// role" with the same 50013, so a failing grant sends people to check the one
+// that was already fine. This answers both questions directly, by comparing
+// positions in the role list rather than by attempting a grant on a real member.
+router.get('/hierarchy', async (req, res) => {
+  const roleId = (process.env.DISCORD_VERIFIED_ROLE_ID || '').trim();
+  if (!botConfigured) {
+    return res.json({ ok: false, reason: 'No bot token is configured.' });
+  }
+  if (!roleId) {
+    return res.json({ ok: true, enabled: false, reason: 'DISCORD_VERIFIED_ROLE_ID is empty — no role is granted on sign-in.' });
+  }
+
+  try {
+    const roles = await listRoles();
+    const target = roles.find((r) => r.id === roleId);
+    if (!target) {
+      return res.json({
+        ok: false, enabled: true, roleId,
+        reason: `No role with ID ${roleId} exists in this server. Check DISCORD_VERIFIED_ROLE_ID.`,
+      });
+    }
+
+    // The bot's own roles aren't in listRoles() output (that's every role in
+    // the server), so read the bot's member object to find which it holds.
+    // A bot's user ID is its application ID, which is DISCORD_CLIENT_ID.
+    const botUserId = (process.env.DISCORD_CLIENT_ID || '').trim();
+    if (!botUserId) {
+      return res.json({
+        ok: false, enabled: true, role: target,
+        reason: 'DISCORD_CLIENT_ID is not set, so the bot\'s own rank can\'t be looked up.',
+      });
+    }
+    const me = await fetchMember(botUserId);
+    if (me.status !== 200) {
+      return res.json({
+        ok: false, enabled: true, role: target,
+        reason: 'Could not read the bot\'s own member record — is the bot actually in this server?',
+      });
+    }
+    const botRoles = roles.filter((r) => (me.member.roles || []).includes(r.id));
+    const botTop = botRoles.reduce((hi, r) => (!hi || r.position > hi.position ? r : hi), null);
+
+    if (!botTop) {
+      return res.json({
+        ok: false, enabled: true, role: target,
+        reason: 'The bot holds no roles at all, so it sits below everything. Re-invite it with the Manage Roles permission.',
+      });
+    }
+    if (botTop.position <= target.position) {
+      return res.json({
+        ok: false, enabled: true, role: target, botTopRole: botTop,
+        reason: `The bot's highest role ("${botTop.name}", position ${botTop.position}) is NOT above `
+          + `"${target.name}" (position ${target.position}). Drag the bot's role higher in `
+          + 'Server Settings → Roles — grants will fail until you do.',
+      });
+    }
+
+    res.json({
+      ok: true, enabled: true, role: target, botTopRole: botTop,
+      reason: `"${botTop.name}" outranks "${target.name}" — grants should work.`,
+    });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: err.message });
   }
 });
 

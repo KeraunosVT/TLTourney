@@ -17,7 +17,7 @@ const express = require('express');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
-const { fetchMember, botConfigured } = require('./discord');
+const { fetchMember, addRole, botConfigured } = require('./discord');
 
 const router = express.Router();
 
@@ -40,6 +40,15 @@ const ALLOWED_ROLE_IDS = (process.env.DISCORD_ALLOWED_ROLE_IDS || '')
 // approval queue is unreachable until you set this.
 const ADMIN_ROLE_IDS = (process.env.DISCORD_ADMIN_ROLE_IDS || '')
   .split(',').map((s) => s.trim()).filter(Boolean);
+
+// Handed out automatically the first time someone signs in on the site, and
+// re-applied on every login after that (the grant is idempotent, so a role
+// removed by hand comes back next time they visit).
+//
+// This one is WRITTEN to Discord rather than read from it, which makes it the
+// only setting here that needs the bot to hold "Manage Roles" — and the bot's
+// own role to sit above this one in the server's role list. EMPTY = feature off.
+const VERIFIED_ROLE_ID = (process.env.DISCORD_VERIFIED_ROLE_ID || '').trim();
 
 const COOKIE_NAME = 'tlt_session';
 const STATE_COOKIE = 'tlt_oauth_state';
@@ -64,6 +73,12 @@ if (authConfigured && ADMIN_ROLE_IDS.length === 0) {
 }
 if (authConfigured && !botConfigured) {
   console.warn('⚠️  No bot token — sessions cannot be re-verified and decisions cannot be DMed.');
+}
+if (VERIFIED_ROLE_ID && !botConfigured) {
+  console.warn('⚠️  DISCORD_VERIFIED_ROLE_ID is set but there is no bot token — nobody will be given the role.');
+}
+if (VERIFIED_ROLE_ID) {
+  console.log(`   → signing in grants role ${VERIFIED_ROLE_ID} (bot needs "Manage Roles", ranked above it)`);
 }
 
 const isProd = process.env.NODE_ENV === 'production';
@@ -126,6 +141,13 @@ router.get('/discord/callback', async (req, res) => {
 
     const sessionUser = evaluateMember(memberRes.data);
     if (!sessionUser) return res.redirect(`${APP_URL}?auth=forbidden`);
+
+    // Mark them verified in Discord. Deliberately AFTER the access check —
+    // someone whose roles don't admit them to the site shouldn't be tagged as
+    // verified by it — and deliberately non-fatal: addRole never throws, and
+    // its result is ignored, because a Discord hiccup here must not be the
+    // reason somebody can't sign in.
+    if (VERIFIED_ROLE_ID) await addRole(sessionUser.id, VERIFIED_ROLE_ID);
 
     issueSession(res, sessionUser);
     res.redirect(APP_URL);

@@ -90,6 +90,27 @@ touching `CORS_ORIGINS`.
 
 For a production-shaped run: `npm run build`, then `npm start` and open `:3000`.
 
+## The role granted on sign-in
+
+Set `DISCORD_VERIFIED_ROLE_ID` and anyone who completes Discord login on the site is given that
+role. It's re-applied on every login, so a role removed by hand comes back next visit. Leave the
+variable empty and the feature is off.
+
+This is the only thing the app **writes** to Discord, and it's the only reason the bot needs a
+permission at all:
+
+- the bot must hold **Manage Roles**, and
+- the bot's own role must sit **above** the granted role in Server Settings → Roles.
+
+Discord reports a failure of the second as `50013 Missing Permissions` — byte-for-byte identical to
+the first. So a working Manage Roles permission with the bot ranked too low looks exactly like a
+missing permission, and you go and check the thing that was already fine.
+`GET /api/organizer/hierarchy` compares the two positions and tells you which it is.
+
+Granting is deliberately **non-fatal**: `addRole` never throws and the login flow ignores its
+result. Somebody who can't be given a role can still sign in — the alternative is a Discord outage
+locking every player out of a site that doesn't otherwise need Discord to be up.
+
 ## Deploying to tnltourneystats.com (Hostinger)
 
 This is a persistent Node process, not PHP — it needs a plan that runs Node: **Business** or **Cloud
@@ -214,6 +235,7 @@ resubmitted unchanged, and the organizer does the same work twice.
 | `POST /api/organizer/signups/approve-all` | bulk, each still individually guarded |
 | `PUT /api/organizer/tournament` | name, status, roster size, close date |
 | `GET /api/organizer/roles` | the tournament server's roles, for setup |
+| `GET /api/organizer/hierarchy` | whether the sign-in role is actually grantable |
 
 Everything under `/api` except health, tournament and auth requires a session; everything under
 `/api/organizer` additionally requires an organizer role.
