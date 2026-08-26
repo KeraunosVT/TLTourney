@@ -1,0 +1,14 @@
+{
+  "name": "tltourney",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node backend/server.js",
+    "_comment_test": "Glob rather than a bare directory: `node --test backend/test` fails to resolve on Windows, while the quoted pattern is globbed by Node itself and works everywhere. Needs no dependencies — node:test is built in.",
+    "test": "node --test \"backend/test/*.test.js\"",
+    "dev:api": "cd backend && npm start",
+    "dev:web": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "postinstall": "cd backend && npm install && cd ../frontend && npm install"
+  }
+}

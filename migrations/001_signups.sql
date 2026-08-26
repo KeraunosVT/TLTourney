@@ -1,0 +1,111 @@
+-- 001_signups.sql — tournaments and the player signup pool.
+--
+-- Run this in the Supabase SQL editor of the TLTourney project. This is a NEW,
+-- SEPARATE Supabase project from Gear-Gap: nothing here shares storage with the
+-- guild app, and no table below exists over there.
+--
+-- Safe to re-run: every statement is guarded.
+
+create extension if not exists pgcrypto;
+
+-- ── Tournaments ─────────────────────────────────────────────────────────────
+-- One row per tournament. The app works on the single tournament whose status
+-- is not 'complete' — multi-tournament is a later screen, not a later migration,
+-- which is why every table below already carries tournament_id.
+create table if not exists tournaments (
+  id                uuid primary key default gen_random_uuid(),
+  name              text not null,
+  -- 'signups' is the only status in which a player may create or edit a signup.
+  -- Everything else is a read-only pool, which is what stops a roster changing
+  -- underneath a draft that is already running.
+  status            text not null default 'setup'
+                    check (status in ('setup', 'signups', 'draft', 'live', 'complete')),
+  signups_close_at  timestamptz,
+  roster_size       int  not null default 6 check (roster_size between 1 and 20),
+  created_at        timestamptz not null default now()
+);
+
+-- ── Player signups ──────────────────────────────────────────────────────────
+-- The pool captains draft from. A signup is invisible to captains until an
+-- organizer approves it.
+create table if not exists player_signups (
+  id               uuid primary key default gen_random_uuid(),
+  tournament_id    uuid not null references tournaments(id) on delete cascade,
+
+  -- Identity comes from the Discord session, never from the request body —
+  -- otherwise anyone could file a signup as anyone else.
+  discord_id       text not null,
+  discord_username text,
+
+  player_name      text not null check (length(btrim(player_name)) between 1 and 32),
+  weapon_1         text not null,
+  weapon_2         text not null,
+  -- Derived from the weapon pair server-side and stored so the pool can be
+  -- queried and sorted by class. Recomputed on every write, so it cannot drift
+  -- from the weapons it came from.
+  class_name       text not null,
+  gear_level       int  not null check (gear_level between 0 and 20000),
+  nights           text[] not null default '{}',
+  notes            text check (notes is null or length(notes) <= 500),
+  wants_captain    boolean not null default false,
+
+  status           text not null default 'pending'
+                   check (status in ('pending', 'approved', 'rejected', 'withdrawn')),
+  decision_note    text,
+  decided_by       text,
+  decided_at       timestamptz,
+
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+
+  -- One signup per person per tournament. Without this, a double-submitted form
+  -- puts the same player on the board twice and two captains can draft them.
+  constraint player_signups_one_per_person unique (tournament_id, discord_id),
+  -- A class is a PAIR. Two of the same weapon is not a build in this game, and
+  -- the derive step has no answer for it.
+  constraint player_signups_distinct_weapons check (weapon_1 <> weapon_2)
+);
+
+create index if not exists player_signups_tournament_status_idx
+  on player_signups (tournament_id, status);
+
+-- Case-insensitive lookup of an in-game name, for matching scoreboard rows to
+-- signups later. Not unique: two people genuinely can pick the same name across
+-- servers, and blocking the second one at signup time is not this app's call.
+create index if not exists player_signups_name_idx
+  on player_signups (tournament_id, lower(player_name));
+
+-- ── Audit log ───────────────────────────────────────────────────────────────
+-- Every organizer decision. Approvals and rejections are the actions people
+-- argue about afterwards, so they are the ones worth recording.
+create table if not exists audit_log (
+  id          bigserial primary key,
+  actor_id    text,
+  actor_name  text,
+  action      text not null,
+  target      text,
+  detail      jsonb,
+  created_at  timestamptz not null default now()
+);
+
+create index if not exists audit_log_created_idx on audit_log (created_at desc);
+
+-- ── updated_at ──────────────────────────────────────────────────────────────
+create or replace function touch_updated_at() returns trigger as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists player_signups_touch on player_signups;
+create trigger player_signups_touch
+  before update on player_signups
+  for each row execute function touch_updated_at();
+
+-- ── Seed the first tournament ───────────────────────────────────────────────
+-- Open for signups immediately, so the app has something to point at on first
+-- boot. Rename it on the organizer page; delete it if you'd rather start clean.
+insert into tournaments (name, status, roster_size)
+select 'Ashfall Invitational', 'signups', 6
+where not exists (select 1 from tournaments);

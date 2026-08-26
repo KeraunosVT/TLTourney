@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Throne & Liberty palette — brass on deep ink, oxblood for refusal, verdigris
+   for the one thing that means "you're through". Lifted from Gear-Gap's
+   `throneliberty` theme so the two apps look like they came from the same
+   place, which they did. */
+:root,
+[data-theme='dark'] {
+  --color-ink: 11 11 12;
+  --color-panel: 23 22 20;
+  --color-panelup: 32 31 28;
+  --color-line: 51 48 42;
+  --color-brass: 184 146 63;
+  --color-brassbright: 224 181 99;
+  --color-oxblood: 143 45 45;
+  --color-oxblooddeep: 46 20 18;
+  --color-verdigris: 110 158 122;
+  --color-verdigrisdeep: 22 38 28;
+  --color-bone: 242 240 236;
+  --color-ash: 154 148 138;
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --color-ink: 244 242 238;
+  --color-panel: 255 255 255;
+  --color-panelup: 235 232 225;
+  --color-line: 221 215 202;
+  --color-brass: 138 107 38;
+  --color-brassbright: 107 80 28;
+  --color-oxblood: 122 36 36;
+  --color-oxblooddeep: 250 235 233;
+  --color-verdigris: 47 104 68;
+  --color-verdigrisdeep: 232 242 234;
+  --color-bone: 23 20 15;
+  --color-ash: 107 100 89;
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background-color: rgb(var(--color-ink));
+  background-image:
+    radial-gradient(ellipse 90% 60% at 50% 0%, rgb(var(--color-brass) / 0.09), transparent 62%);
+  background-attachment: fixed;
+  color: rgb(var(--color-bone));
+  font-family: 'Noto Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .eyebrow {
+    @apply text-[10px] uppercase tracking-[0.14em] font-semibold text-ash;
+  }
+  .panel {
+    @apply bg-panel border border-line rounded-md;
+  }
+  .field-label {
+    @apply text-[11px] uppercase tracking-[0.1em] font-semibold text-ash flex items-center gap-2;
+  }
+  .field-input {
+    @apply w-full bg-panelup text-bone border border-line rounded px-3 py-2 text-[15px]
+           outline-none focus:border-brass placeholder:text-ash/60;
+  }
+  .field-hint {
+    @apply text-xs text-ash leading-relaxed max-w-[58ch];
+  }
+  .field-error {
+    @apply text-xs text-oxblood font-medium;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Digits that line up in a column should actually line up. */
+.mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+*:focus-visible {
+  outline: 2px solid rgb(var(--color-brassbright));
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
