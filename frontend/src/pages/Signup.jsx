@@ -17,7 +17,7 @@ const SLOTS = [
 ];
 
 const STATUS_PILL = {
-  pending: ['brass', 'Awaiting review'],
+  pending: ['crimson', 'Awaiting review'],
   approved: ['good', 'Approved'],
   rejected: ['bad', 'Not accepted'],
   withdrawn: ['quiet', 'Withdrawn'],
@@ -248,7 +248,7 @@ export default function Signup() {
                       <div className="flex items-center gap-2.5 flex-wrap">
                         <span className="text-[11px] text-ash w-[92px] flex-none">
                           {slot.label}
-                          {slot.required && <span className="text-brass"> *</span>}
+                          {slot.required && <span className="text-crimson"> *</span>}
                         </span>
                         <select
                           className="field-input flex-1 min-w-[180px]"
@@ -297,8 +297,8 @@ export default function Signup() {
                       onClick={() => toggleNight(n)}
                       className={`px-3 py-1.5 rounded border text-[13px] transition-colors disabled:opacity-45 ${
                         on
-                          ? 'bg-brass/20 border-brass/65 text-bone font-semibold'
-                          : 'bg-panelup/40 border-line text-ash hover:text-bone hover:border-brass/60'
+                          ? 'bg-crimson/20 border-crimson/65 text-bone font-semibold'
+                          : 'bg-panelup/40 border-line text-ash hover:text-bone hover:border-crimson/60'
                       }`}
                     >
                       {n}
@@ -324,7 +324,7 @@ export default function Signup() {
             <label className="flex items-start gap-2.5 text-sm cursor-pointer">
               <input
                 type="checkbox"
-                className="mt-0.5 w-4 h-4 accent-[rgb(var(--color-brass))]"
+                className="mt-0.5 w-4 h-4 accent-[rgb(var(--color-crimson))]"
                 checked={form.wants_captain}
                 onChange={(e) => set('wants_captain', e.target.checked)}
                 disabled={locked}
@@ -438,7 +438,7 @@ function Steps({ signup }) {
                 : s.done
                   ? 'bg-verdigris border-verdigris'
                   : s.now
-                    ? 'bg-brass border-brassbright ring-[3px] ring-brass/20'
+                    ? 'bg-crimson border-crimsonbright ring-[3px] ring-crimson/20'
                     : 'bg-panel border-line'
             }`}
           />
@@ -468,7 +468,7 @@ function ClassBars({ classes }) {
         <div key={c.class_name} className="flex items-center gap-2.5 mb-1.5 text-[13px]">
           <span className="w-[96px] flex-none text-ash truncate" title={c.class_name}>{c.class_name}</span>
           <span className="flex-1 h-[7px] rounded bg-panelup overflow-hidden">
-            <i className="block h-full bg-brass/75" style={{ width: `${(c.mains / max) * 100}%` }} />
+            <i className="block h-full bg-crimson/75" style={{ width: `${(c.mains / max) * 100}%` }} />
           </span>
           <span
             className="mono text-[11.5px] text-ash w-10 text-right"

@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate, NavLink, Outlet } from 'react-r
 import { AuthProvider, useAuth } from './auth';
 import { useLocation } from 'react-router-dom';
 import ErrorBoundary from './components/ErrorBoundary';
+import { Sigil } from './components/Brand';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Queue from './pages/Queue';
@@ -12,16 +13,25 @@ function Shell() {
   const link = ({ isActive }) =>
     `px-3 py-2 rounded text-[13.5px] border-l-2 flex items-center gap-2.5 transition-colors ${
       isActive
-        ? 'bg-panelup text-bone border-brass'
+        ? 'bg-panelup text-bone border-crimson'
         : 'text-ash border-transparent hover:bg-panelup hover:text-bone'
     }`;
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
-      <nav className="md:w-[208px] md:flex-none border-b md:border-b-0 md:border-r border-line bg-panel/55 p-4 flex md:flex-col gap-5 items-center md:items-stretch overflow-x-auto">
-        <div className="px-2">
-          <div className="font-display text-[21px] leading-none whitespace-nowrap">
-            TL<span className="text-brass">Tourney</span>
+      <nav className="md:w-[224px] md:flex-none border-b md:border-b-0 md:border-r border-line bg-panel/55 p-4 flex md:flex-col gap-5 items-center md:items-stretch overflow-x-auto">
+        {/* Sized against the rail's 224px minus its 16px padding either side:
+            32 + 10 gap leaves 166px for the type, which "THRONE & LIBERTY" at
+            13px Marcellus fills almost exactly. Shrink the rail and this wraps. */}
+        <div className="px-1 flex items-center gap-2.5">
+          <Sigil size={32} />
+          <div className="leading-none">
+            <div className="wordmark text-[13px] tracking-[0.04em] whitespace-nowrap">
+              THRONE <span className="text-crimson">&amp;</span> LIBERTY
+            </div>
+            <div className="text-[8px] uppercase tracking-[0.26em] text-ash mt-[5px] whitespace-nowrap">
+              Tournament Series
+            </div>
           </div>
         </div>
         <div className="flex md:flex-col gap-1 flex-1 md:flex-none">
@@ -31,7 +41,7 @@ function Shell() {
         <div className="md:mt-auto px-2 flex md:flex-col items-center md:items-start gap-2 text-xs text-ash">
           <span className="whitespace-nowrap">
             {user?.username}
-            {user?.isOrganizer && <span className="text-brass"> · organizer</span>}
+            {user?.isOrganizer && <span className="text-crimson"> · organizer</span>}
           </span>
           <button onClick={logout} className="hover:text-bone underline underline-offset-2">
             Sign out

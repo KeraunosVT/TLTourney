@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api';
+import { LockupVertical } from '../components/Brand';
 
 // Why a login attempt bounced. Discord sends people back here with ?auth=…
 const REASONS = {
@@ -32,12 +33,14 @@ export default function Login() {
   return (
     <div className="min-h-screen grid place-items-center px-5 py-10">
       <div className="w-full max-w-[440px]">
-        <div className="text-center mb-7">
-          <div className="font-display text-[34px] tracking-wide">
-            TL<span className="text-brass">Tourney</span>
-          </div>
+        {/* The vertical lockup, not the horizontal one: this column is 440px at
+            its widest and the horizontal lockup's "TOURNAMENT SERIES" would be
+            about 7px here. The mark is the page — everything else on it is one
+            button. */}
+        <div className="flex flex-col items-center text-center mb-7">
+          <LockupVertical width={300} />
           {tournament && (
-            <div className="eyebrow mt-2">{tournament.name}</div>
+            <div className="eyebrow mt-3">{tournament.name}</div>
           )}
         </div>
 
@@ -56,8 +59,8 @@ export default function Login() {
           <a
             href="/api/auth/login"
             className="inline-flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded
-                       border border-brass/60 bg-brass/15 text-brassbright font-semibold text-sm
-                       hover:bg-brass/25 transition-colors"
+                       border border-crimson/60 bg-crimson/15 text-crimsonbright font-semibold text-sm
+                       hover:bg-crimson/25 transition-colors"
           >
             Sign in with Discord
           </a>

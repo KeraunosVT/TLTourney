@@ -20,7 +20,7 @@ export function Panel({ title, subtitle, right, children, className = '' }) {
 }
 
 const PILL_TONES = {
-  brass: 'text-brassbright border-brass/55 bg-brass/15',
+  crimson: 'text-crimsonbright border-crimson/55 bg-crimson/15',
   good: 'text-verdigris border-verdigris/45 bg-verdigrisdeep',
   bad: 'text-oxblood border-oxblood/50 bg-oxblooddeep',
   quiet: 'text-ash border-line bg-panelup',
@@ -38,10 +38,21 @@ export function Pill({ tone = 'quiet', children, blip = false }) {
   );
 }
 
+// The brand's accent IS red, which means "primary action" and "destructive
+// action" would otherwise be the same colour — Approve and Reject rendered
+// identically, on the one screen where confusing them costs the most.
+//
+// So the two are split by HUE rather than by shade: an action that admits
+// somebody is verdigris, an action that turns them away is oxblood, and the
+// crimson accent is kept for neutral primaries (Save, Sign in) and for
+// navigation. Distinguishing them by two tints of the same red would be a
+// distinction nobody notices at a glance, which is the only speed that counts
+// when working down a queue.
 const BTN = {
-  primary: 'border-brass/60 text-brassbright bg-brass/15 hover:bg-brass/25',
-  ghost: 'border-line text-ash hover:text-bone hover:border-brass',
-  danger: 'border-oxblood/60 text-oxblood bg-oxblood/10 hover:bg-oxblood/20',
+  primary: 'border-crimson/60 text-crimsonbright bg-crimson/15 hover:bg-crimson/25',
+  good: 'border-verdigris/55 text-verdigris bg-verdigris/12 hover:bg-verdigris/22',
+  danger: 'border-oxblood/70 text-crimsonbright bg-oxblood/25 hover:bg-oxblood/40',
+  ghost: 'border-line text-ash hover:text-bone hover:border-crimson',
 };
 
 export function Button({ variant = 'primary', className = '', children, ...props }) {

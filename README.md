@@ -90,6 +90,39 @@ touching `CORS_ORIGINS`.
 
 For a production-shaped run: `npm run build`, then `npm start` and open `:3000`.
 
+## Brand
+
+The logo lives in [`frontend/public/`](frontend/public/) and is the source of the interface's
+colours — every token in [`index.css`](frontend/src/index.css) is lifted from the mark's own SVG,
+so the site and the logo are literally the same values rather than a close match by eye.
+
+| | | |
+|---|---|---|
+| `#A31219` | crimson | the wordmark and the sword's crossguard — the **accent** |
+| `#5A0A10` | oxblood | laurel and outer ring; the most-used colour in the mark |
+| `#D8D0C4` | bone | the blade and the runes — body text |
+| `#0B0A0C` | ink | the disc — the page ground |
+| `#8E8880` | ash | "TOURNAMENT SERIES" — muted text |
+
+Two consequences worth knowing before changing anything:
+
+- **The neutrals are warm.** They are brown-greys, not blue-greys, because the bone is warm. A cool
+  grey next to `#D8D0C4` reads as a bug.
+- **The page ground is the sigil's own disc colour**, exactly. That is why the mark sits on the page
+  with no plate behind it and no visible edge — and why changing `--color-ink` would suddenly give
+  the logo a circle around it.
+
+**The accent is red, and so is "danger".** Left alone that makes Approve and Reject render
+identically, on the one screen where confusing them costs most. They are split by hue instead of by
+shade: admitting somebody is `verdigris`, turning them away is `oxblood`, and crimson is kept for
+neutral primaries and navigation. Two tints of the same red would be a distinction nobody notices at
+a glance, which is the only speed that matters when working down a queue.
+
+Files: `tl-sigil-mark.svg` (the sigil alone), `tl-sigil-lockup-horizontal.svg` and
+`-vertical.svg` (sigil plus wordmark), `tl-sigil-mark-512.png` and `tl-sigil-favicon-64.png`
+(icons). [`Brand.jsx`](frontend/src/components/Brand.jsx) wraps them. The vertical lockup is used
+anywhere narrower than ~280px, where the horizontal one's small caps stop being readable.
+
 ## The role granted on sign-in
 
 Set `DISCORD_VERIFIED_ROLE_ID` and anyone who completes Discord login on the site is given that

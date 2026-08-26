@@ -2,48 +2,84 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Throne & Liberty palette — brass on deep ink, oxblood for refusal, verdigris
-   for the one thing that means "you're through". Lifted from Gear-Gap's
-   `throneliberty` theme so the two apps look like they came from the same
-   place, which they did. */
+/* ─────────────────────────────────────────────────────────────────────────
+   Throne & Liberty Tournament Series.
+   Every value below is lifted from the logo's own SVG source, not sampled by
+   eye off a PNG — so the interface and the mark are literally the same colours:
+
+     #a31219  crimson    the wordmark, the sword's crossguard        → accent
+     #5a0a10  oxblood    laurel leaves and the outer ring (the most
+                         used colour in the mark by area)            → depth
+     #d8d0c4  bone       the blade and the runes                     → text
+     #0b0a0c  ink        the disc                                    → ground
+     #8e8880  ash        "TOURNAMENT SERIES"                         → muted
+     #5e5952  dim                                                    → rules
+
+   The neutrals are WARM — brownish, not blue-grey — because the bone is warm.
+   A cool grey next to #d8d0c4 reads as a mistake.
+
+   Note the ground is #0b0a0c exactly, which is the fill of the sigil's own
+   disc. That is why the mark can sit on the page with no plate behind it: its
+   background and the page's are the same colour.
+   ───────────────────────────────────────────────────────────────────────── */
 :root,
 [data-theme='dark'] {
-  --color-ink: 11 11 12;
-  --color-panel: 23 22 20;
-  --color-panelup: 32 31 28;
-  --color-line: 51 48 42;
-  --color-brass: 184 146 63;
-  --color-brassbright: 224 181 99;
-  --color-oxblood: 143 45 45;
-  --color-oxblooddeep: 46 20 18;
-  --color-verdigris: 110 158 122;
-  --color-verdigrisdeep: 22 38 28;
-  --color-bone: 242 240 236;
-  --color-ash: 154 148 138;
+  --color-ink: 11 10 12;            /* #0B0A0C — the sigil's disc */
+  --color-panel: 22 21 23;
+  --color-panelup: 32 30 33;
+  --color-line: 52 48 50;
+
+  --color-crimson: 163 18 25;       /* #A31219 — the wordmark */
+  --color-crimsonbright: 201 35 43; /* lifted, for hover and emphasis */
+  --color-oxblood: 90 10 16;        /* #5A0A10 — the laurel */
+  --color-oxblooddeep: 46 8 12;
+
+  --color-bone: 216 208 196;        /* #D8D0C4 — the blade */
+  --color-ash: 142 136 128;         /* #8E8880 — "TOURNAMENT SERIES" */
+  --color-dim: 94 89 82;            /* #5E5952 */
+
+  /* Success is the one hue the mark doesn't contain, and it has to be
+     unmistakably NOT the brand red — an approval that looks like a rejection
+     is worse than an ugly green. Desaturated and warmed so it still belongs. */
+  --color-verdigris: 108 150 116;
+  --color-verdigrisdeep: 20 34 25;
+
   color-scheme: dark;
 }
 
+/* The mark is a dark-ground object. In light mode the disc keeps its own black
+   — that is correct and intended, the same way a printed logo doesn't invert —
+   so the surrounding palette lightens while the crimson deepens to hold its
+   contrast against parchment rather than against ink. */
 [data-theme='light'] {
-  --color-ink: 244 242 238;
-  --color-panel: 255 255 255;
-  --color-panelup: 235 232 225;
-  --color-line: 221 215 202;
-  --color-brass: 138 107 38;
-  --color-brassbright: 107 80 28;
-  --color-oxblood: 122 36 36;
-  --color-oxblooddeep: 250 235 233;
-  --color-verdigris: 47 104 68;
-  --color-verdigrisdeep: 232 242 234;
-  --color-bone: 23 20 15;
-  --color-ash: 107 100 89;
+  --color-ink: 242 239 233;
+  --color-panel: 255 254 251;
+  --color-panelup: 233 229 221;
+  --color-line: 216 210 199;
+
+  --color-crimson: 138 14 21;
+  --color-crimsonbright: 106 10 16;
+  --color-oxblood: 122 22 28;
+  --color-oxblooddeep: 249 234 233;
+
+  --color-bone: 26 23 21;
+  --color-ash: 106 100 92;
+  --color-dim: 138 132 123;
+
+  --color-verdigris: 44 100 62;
+  --color-verdigrisdeep: 231 241 233;
+
   color-scheme: light;
 }
 
 body {
   margin: 0;
   background-color: rgb(var(--color-ink));
+  /* A faint crimson bloom from the top, echoing the ring around the sigil.
+     Kept very low — the mark is the only saturated thing on the page. */
   background-image:
-    radial-gradient(ellipse 90% 60% at 50% 0%, rgb(var(--color-brass) / 0.09), transparent 62%);
+    radial-gradient(ellipse 90% 55% at 50% 0%, rgb(var(--color-crimson) / 0.10), transparent 60%),
+    radial-gradient(ellipse 120% 60% at 50% 100%, rgb(var(--color-oxblood) / 0.07), transparent 62%);
   background-attachment: fixed;
   color: rgb(var(--color-bone));
   font-family: 'Noto Sans', system-ui, sans-serif;
@@ -51,27 +87,25 @@ body {
 }
 
 @layer components {
+  /* Letterspaced small caps, the way "TOURNAMENT SERIES" is set in the mark. */
   .eyebrow {
-    @apply text-[10px] uppercase tracking-[0.14em] font-semibold text-ash;
+    @apply text-[10px] uppercase tracking-[0.18em] font-semibold text-ash;
   }
   .panel {
     @apply bg-panel border border-line rounded-md;
   }
   .field-label {
-    @apply text-[11px] uppercase tracking-[0.1em] font-semibold text-ash flex items-center gap-2;
+    @apply text-[11px] uppercase tracking-[0.12em] font-semibold text-ash flex items-center gap-2;
   }
   .field-input {
     @apply w-full bg-panelup text-bone border border-line rounded px-3 py-2 text-[15px]
-           outline-none focus:border-brass placeholder:text-ash/60;
+           outline-none focus:border-crimson placeholder:text-ash/60;
   }
   .field-hint {
     @apply text-xs text-ash leading-relaxed max-w-[58ch];
   }
   .field-error {
-    @apply text-xs text-oxblood font-medium;
-  }
-  .tabular {
-    font-variant-numeric: tabular-nums;
+    @apply text-xs text-crimsonbright font-medium;
   }
 }
 
@@ -81,8 +115,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* The display face, matching the wordmark's weight and spacing. */
+.wordmark {
+  font-family: 'Marcellus', Georgia, serif;
+  letter-spacing: 0.02em;
+}
+
 *:focus-visible {
-  outline: 2px solid rgb(var(--color-brassbright));
+  outline: 2px solid rgb(var(--color-crimsonbright));
   outline-offset: 2px;
   border-radius: 3px;
 }

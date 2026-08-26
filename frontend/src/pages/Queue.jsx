@@ -137,7 +137,7 @@ export default function Queue() {
           {open
             ? <Button variant="ghost" onClick={() => setStatus('draft')}>Close signups</Button>
             : <Button variant="ghost" onClick={() => setStatus('signups')}>Reopen signups</Button>}
-          <Button onClick={approveAll} disabled={!counts.pending || busy === 'all'}>
+          <Button variant="good" onClick={approveAll} disabled={!counts.pending || busy === 'all'}>
             {busy === 'all' ? 'Approving…' : `Approve all ${counts.pending || 0}`}
           </Button>
         </div>
@@ -166,8 +166,8 @@ export default function Queue() {
                 onClick={() => setTab(key)}
                 className={`px-3 py-1.5 rounded text-xs font-semibold border transition-colors ${
                   tab === key
-                    ? 'bg-brass/18 border-brass/60 text-bone'
-                    : 'border-line text-ash hover:text-bone hover:border-brass/50'
+                    ? 'bg-crimson/18 border-crimson/60 text-bone'
+                    : 'border-line text-ash hover:text-bone hover:border-crimson/50'
                 }`}
               >
                 {label}
@@ -216,7 +216,7 @@ export default function Queue() {
                 <tr key={r.id} className="hover:bg-panelup/60">
                   <td className="px-3.5 py-2.5 border-b border-line/50">
                     <span className="font-medium">{r.player_name}</span>
-                    {r.wants_captain && <Pill tone="brass">wants to captain</Pill>}
+                    {r.wants_captain && <Pill tone="crimson">wants to captain</Pill>}
                     {r.notes && (
                       <div className="text-xs text-ash mt-1 max-w-[40ch] whitespace-normal">{r.notes}</div>
                     )}
@@ -244,23 +244,23 @@ export default function Queue() {
                     {/* An entry edited after it was decided is worth a glance —
                         the organizer approved what it said at the time. */}
                     {r.decided_at && new Date(r.updated_at) > new Date(r.decided_at) && (
-                      <span className="block text-brass">edited since</span>
+                      <span className="block text-crimson">edited since</span>
                     )}
                   </td>
                   <td className="px-3.5 py-2.5 border-b border-line/50 text-right whitespace-nowrap">
                     {r.status === 'pending' ? (
                       <>
-                        <Button onClick={() => decide(r, 'approved')} disabled={busy === r.id}>Approve</Button>
-                        <Button variant="ghost" className="ml-1.5" onClick={() => decide(r, 'rejected')} disabled={busy === r.id}>
+                        <Button variant="good" onClick={() => decide(r, 'approved')} disabled={busy === r.id}>Approve</Button>
+                        <Button variant="danger" className="ml-1.5" onClick={() => decide(r, 'rejected')} disabled={busy === r.id}>
                           Reject
                         </Button>
                       </>
                     ) : r.status === 'approved' ? (
-                      <Button variant="ghost" onClick={() => decide(r, 'rejected')} disabled={busy === r.id}>
+                      <Button variant="danger" onClick={() => decide(r, 'rejected')} disabled={busy === r.id}>
                         Remove from board
                       </Button>
                     ) : r.status === 'rejected' ? (
-                      <Button onClick={() => decide(r, 'approved')} disabled={busy === r.id}>Approve after all</Button>
+                      <Button variant="good" onClick={() => decide(r, 'approved')} disabled={busy === r.id}>Approve after all</Button>
                     ) : (
                       <span className="text-xs text-ash">withdrew</span>
                     )}

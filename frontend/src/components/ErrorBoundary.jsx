@@ -43,8 +43,8 @@ export default class ErrorBoundary extends Component {
           </pre>
           <button
             onClick={() => { this.setState({ error: null }); window.location.reload(); }}
-            className="px-4 py-2 rounded border border-brass/60 bg-brass/15 text-brassbright
-                       text-sm font-semibold hover:bg-brass/25"
+            className="px-4 py-2 rounded border border-crimson/60 bg-crimson/15 text-crimsonbright
+                       text-sm font-semibold hover:bg-crimson/25"
           >
             Reload
           </button>
