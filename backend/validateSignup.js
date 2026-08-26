@@ -12,6 +12,7 @@
 //                  the whole reason this app has a login.
 
 const { CLASS_NAMES, isClass } = require('../shared/classes.cjs');
+const { ROLES, POSITIONS, isRole } = require('../shared/roles.cjs');
 
 const NIGHTS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -71,6 +72,31 @@ function validateSignup(body = {}) {
     errors.classes = `Pick at most ${MAX_CLASSES} classes.`;
   }
 
+  // ── Role ──────────────────────────────────────────────────────────────────
+  // Required on every write. Existing rows may hold null — those predate the
+  // field (see migrations/002) — but nothing may be SAVED without one, which
+  // is how those rows get filled in as their owners edit them.
+  const role = String(body.role ?? '').trim();
+  if (!role) {
+    errors.role = 'Pick a role.';
+  } else if (!isRole(role)) {
+    errors.role = `Role must be one of: ${ROLES.join(', ')}.`;
+  }
+
+  // ── Positions ─────────────────────────────────────────────────────────────
+  // Many, and put back in the canonical order — front to back, the way a raid
+  // is actually arranged — so two signups that ticked the same boxes in a
+  // different order store the same array and read the same in the queue.
+  const rawPositions = Array.isArray(body.positions) ? body.positions : [];
+  const positions = POSITIONS.filter((p) => rawPositions.includes(p));
+  if (!Array.isArray(body.positions)) {
+    errors.positions = 'Pick at least one position.';
+  } else if (rawPositions.some((p) => !POSITIONS.includes(p))) {
+    errors.positions = `Positions must be from: ${POSITIONS.join(', ')}.`;
+  } else if (positions.length === 0) {
+    errors.positions = 'Pick at least one position — "all" is fine.';
+  }
+
   // ── Nights ────────────────────────────────────────────────────────────────
   // Deduped and put back in week order, so two signups that picked the same
   // nights in a different order store the same array. Unlike classes, order
@@ -98,6 +124,8 @@ function validateSignup(body = {}) {
     value: {
       player_name,
       classes,
+      role,
+      positions,
       nights,
       notes,
       wants_captain: body.wants_captain === true || body.wants_captain === 'true',
@@ -105,4 +133,7 @@ function validateSignup(body = {}) {
   };
 }
 
-module.exports = { validateSignup, NIGHTS, CLASS_NAMES, NAME_MAX, NOTES_MAX, MAX_CLASSES };
+module.exports = {
+  validateSignup, NIGHTS, CLASS_NAMES, ROLES, POSITIONS,
+  NAME_MAX, NOTES_MAX, MAX_CLASSES,
+};

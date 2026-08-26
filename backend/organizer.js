@@ -9,8 +9,8 @@ const { sendDM, listRoles, fetchMember, botConfigured } = require('./discord');
 const router = express.Router();
 
 // The organizer sees everything a player wrote, plus who they are on Discord.
-const FULL = 'id, discord_id, discord_username, player_name, classes, nights, notes, '
-  + 'wants_captain, status, decision_note, decided_by, decided_at, created_at, updated_at';
+const FULL = 'id, discord_id, discord_username, player_name, classes, role, positions, nights, '
+  + 'notes, wants_captain, status, decision_note, decided_by, decided_at, created_at, updated_at';
 
 // ── The whole pool ──────────────────────────────────────────────────────────
 // Not paged. A tournament pool is hundreds of rows at the outside, and paging a
@@ -127,7 +127,7 @@ router.post('/signups/:id/decision', async (req, res) => {
   const dm = await sendDM(
     data.discord_id,
     decision === 'approved'
-      ? `✅ Your signup for **${t.name}** is approved — you're on the draft board as **${data.player_name}** (${(data.classes || []).join(', ')}).`
+      ? `✅ Your signup for **${t.name}** is approved — you're on the draft board as **${data.player_name}** — ${data.role || 'role not set'}, ${(data.classes || []).join(', ')}.`
       : `❌ Your signup for **${t.name}** wasn't accepted.\n> ${cleanNote}\nYou can fix it and submit again while signups are open.`
   );
 
@@ -145,7 +145,7 @@ router.post('/signups/approve-all', async (req, res) => {
 
   const { data: pending, error } = await supabase
     .from('player_signups')
-    .select('id, discord_id, player_name, classes')
+    .select('id, discord_id, player_name, classes, role')
     .eq('tournament_id', t.id)
     .eq('status', 'pending');
 
@@ -166,7 +166,7 @@ router.post('/signups/approve-all', async (req, res) => {
       .maybeSingle();
     if (data) {
       approved += 1;
-      await sendDM(row.discord_id, `✅ Your signup for **${t.name}** is approved — you're on the draft board as **${row.player_name}** (${(row.classes || []).join(', ')}).`);
+      await sendDM(row.discord_id, `✅ Your signup for **${t.name}** is approved — you're on the draft board as **${row.player_name}** — ${row.role || 'role not set'}, ${(row.classes || []).join(', ')}.`);
     } else {
       skipped += 1;
     }

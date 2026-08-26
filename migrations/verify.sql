@@ -47,4 +47,25 @@ select '001 · updated_at trigger',
                where tgname = 'player_signups_touch' and not tgisinternal)
 union all
 select '001 · at least one tournament exists',
-       (select count(*) from tournaments) >= 1;
+       (select count(*) from tournaments) >= 1
+union all
+-- ── 002 ────────────────────────────────────────────────────────────────────
+select '002 · role column',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'player_signups'
+                 and column_name = 'role')
+union all
+select '002 · role is constrained to Tank/DPS/Healer',
+       exists (select 1 from pg_constraint where conname = 'player_signups_role_valid')
+union all
+select '002 · positions column is a text array',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'player_signups'
+                 and column_name = 'positions' and data_type = 'ARRAY')
+union all
+select '002 · positions count is capped',
+       exists (select 1 from pg_constraint where conname = 'player_signups_positions_count')
+union all
+select '002 · positions gin index',
+       exists (select 1 from pg_indexes
+               where schemaname = 'public' and indexname = 'player_signups_positions_idx');

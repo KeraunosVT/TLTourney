@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import api, { errorMessage, fieldErrors } from '../api';
 import { useAuth } from '../auth';
 import { CLASS_NAMES, weaponsLabel } from '@shared/classes.cjs';
+import { ROLES, POSITIONS } from '@shared/roles.cjs';
 import { Panel, Pill, Button, Field, Tile, Note } from '../components/ui';
 
 const NIGHTS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -43,6 +44,8 @@ export default function Signup() {
   const [form, setForm] = useState({
     player_name: '',
     classes: ['', '', ''],
+    role: '',
+    positions: [],
     nights: [],
     notes: '',
     wants_captain: false,
@@ -93,6 +96,11 @@ export default function Signup() {
             player_name: s.player_name,
             // Padded back out to three slots — the stored array is compact.
             classes: [saved[0] || '', saved[1] || '', saved[2] || ''],
+            // Both may be unset on a signup filed before these were asked for
+            // (migration 002 deliberately backfilled nothing). They arrive
+            // empty, the form requires them, and saving fills them in.
+            role: s.role || '',
+            positions: s.positions || [],
             nights: s.nights || [],
             notes: s.notes || '',
             wants_captain: !!s.wants_captain,
@@ -119,6 +127,13 @@ export default function Signup() {
 
   const toggleNight = (n) =>
     set('nights', form.nights.includes(n) ? form.nights.filter((x) => x !== n) : [...form.nights, n]);
+
+  const togglePosition = (p) =>
+    set('positions', form.positions.includes(p)
+      ? form.positions.filter((x) => x !== p)
+      : [...form.positions, p]);
+
+  const allPositions = form.positions.length === POSITIONS.length;
 
   async function save(e) {
     e?.preventDefault();
@@ -280,6 +295,79 @@ export default function Signup() {
               </div>
             </Field>
 
+            {/* Segmented rather than a dropdown: three options that a captain
+                filters on shouldn't need a click to reveal. */}
+            <Field
+              label="Role"
+              error={errors.role}
+              hint="What you're for. One only — your second and third classes already say what you can be moved onto."
+            >
+              <div className="flex gap-1.5 flex-wrap" role="radiogroup" aria-label="Role">
+                {ROLES.map((r) => {
+                  const on = form.role === r;
+                  return (
+                    <button
+                      key={r}
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      disabled={locked}
+                      onClick={() => set('role', r)}
+                      className={`px-4 py-2 rounded border text-[13px] transition-colors disabled:opacity-45 ${
+                        on
+                          ? 'bg-crimson/20 border-crimson/65 text-bone font-semibold'
+                          : 'bg-panelup/40 border-line text-ash hover:text-bone hover:border-crimson/60'
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+
+            <Field
+              label="Positions you can run"
+              error={errors.positions}
+              hint="Where you're willing to stand. Pick as many as apply."
+            >
+              <div className="flex flex-col gap-2">
+                <div className="flex gap-1.5 flex-wrap">
+                  {POSITIONS.map((p) => {
+                    const on = form.positions.includes(p);
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        aria-pressed={on}
+                        disabled={locked}
+                        onClick={() => togglePosition(p)}
+                        className={`px-3.5 py-2 rounded border text-[13px] transition-colors disabled:opacity-45 ${
+                          on
+                            ? 'bg-crimson/20 border-crimson/65 text-bone font-semibold'
+                            : 'bg-panelup/40 border-line text-ash hover:text-bone hover:border-crimson/60'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* One control that flips both ways, rather than separate
+                    "select all" and "clear" buttons — with four options the
+                    second is never the one you want. */}
+                <button
+                  type="button"
+                  disabled={locked}
+                  onClick={() => set('positions', allPositions ? [] : [...POSITIONS])}
+                  className="self-start text-[12px] text-ash hover:text-crimsonbright underline
+                             underline-offset-2 disabled:opacity-45"
+                >
+                  {allPositions ? 'Clear all' : 'Select all four'}
+                </button>
+              </div>
+            </Field>
+
             <Field
               label="Nights you can play"
               error={errors.nights}
@@ -338,7 +426,11 @@ export default function Signup() {
             </label>
 
             <div className="flex items-center gap-3.5 flex-wrap pt-1">
-              <Button type="submit" disabled={locked || saving || picked.length === 0} className="px-5 py-2 text-[13px]">
+              <Button
+                type="submit"
+                disabled={locked || saving || picked.length === 0 || !form.role || form.positions.length === 0}
+                className="px-5 py-2 text-[13px]"
+              >
                 {saving ? 'Saving…' : signup && signup.status !== 'withdrawn' ? 'Save changes' : 'File signup'}
               </Button>
               {signup && signup.status !== 'withdrawn' && !locked && (
@@ -372,6 +464,27 @@ export default function Signup() {
                   note={`${pool.counts.pending ?? 0} awaiting review`}
                 />
                 <Tile label="On the board" value={pool.counts.approved ?? 0} note="approved and draftable" />
+              </div>
+              {/* Role spread first: it's the number that decides whether the
+                  pool can field teams at all. Sixty players with four healers
+                  is not a pool of sixty. */}
+              <div className="px-3.5 pb-3">
+                <div className="eyebrow mb-2">Roles on the board</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {(pool.roles || []).map((r) => (
+                    <div key={r.role} className="bg-panelup/50 border border-line rounded px-2.5 py-2 text-center">
+                      <div className="mono text-[17px]">{r.count}</div>
+                      <div className="text-[10px] uppercase tracking-[0.1em] text-ash mt-0.5">{r.role}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="px-3.5 pb-3">
+                <div className="eyebrow mb-2">Positions covered</div>
+                <CountBars
+                  rows={(pool.positions || []).map((p) => ({ label: p.position, value: p.count }))}
+                  labelWidth={110}
+                />
               </div>
               <div className="px-3.5 pb-4">
                 <div className="eyebrow mb-2">Most-mained classes</div>
@@ -449,6 +562,30 @@ function Steps({ signup }) {
         </li>
       ))}
     </ol>
+  );
+}
+
+// A plain labelled bar row. Unlike ClassBars this keeps the given order and
+// shows every row including the zeroes — for positions, a zero is the whole
+// point: it's the gap somebody should go and fill.
+function CountBars({ rows, labelWidth = 96 }) {
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  return (
+    <div>
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-center gap-2.5 mb-1.5 text-[13px]">
+          <span className="flex-none text-ash truncate" style={{ width: labelWidth }} title={r.label}>
+            {r.label}
+          </span>
+          <span className="flex-1 h-[7px] rounded bg-panelup overflow-hidden">
+            <i className="block h-full bg-crimson/75" style={{ width: `${(r.value / max) * 100}%` }} />
+          </span>
+          <span className={`mono text-[11.5px] w-6 text-right ${r.value === 0 ? 'text-oxblood' : 'text-ash'}`}>
+            {r.value}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

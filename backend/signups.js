@@ -7,13 +7,14 @@ const express = require('express');
 const { supabase, currentTournament, audit } = require('./db');
 const { validateSignup, NIGHTS } = require('./validateSignup');
 const { WEAPONS, WEAPONS_FOR, CLASS_NAMES } = require('../shared/classes.cjs');
+const { ROLES, POSITIONS } = require('../shared/roles.cjs');
 
 const router = express.Router();
 
 // Fields the player is allowed to see about their own signup. `decision_note`
 // is included on purpose: being told why you were turned down is the difference
 // between fixing it and resubmitting the same thing.
-const MINE = 'id, player_name, classes, nights, notes, wants_captain, status, decision_note, created_at, updated_at';
+const MINE = 'id, player_name, classes, role, positions, nights, notes, wants_captain, status, decision_note, created_at, updated_at';
 
 // Signups may only be created or changed while the tournament says so. Once the
 // draft opens the pool is frozen — a roster that changes underneath a running
@@ -43,6 +44,8 @@ const emptyPool = () => ({
   counts: { total: 0, approved: 0, pending: 0 },
   weapons: WEAPONS.map((w) => ({ weapon: w, count: 0 })),
   classes: [],
+  roles: ROLES.map((role) => ({ role, count: 0 })),
+  positions: POSITIONS.map((position) => ({ position, count: 0 })),
 });
 
 router.get('/pool', async (req, res) => {
@@ -52,7 +55,7 @@ router.get('/pool', async (req, res) => {
 
   const { data, error } = await supabase
     .from('player_signups')
-    .select('status, classes')
+    .select('status, classes, role, positions')
     .eq('tournament_id', t.id);
 
   if (error) {
@@ -75,6 +78,16 @@ router.get('/pool', async (req, res) => {
       classCount[c] = (classCount[c] || 0) + 1;
       if (i === 0) mainCount[c] = (mainCount[c] || 0) + 1;
     });
+  });
+
+  // Role and position spread. A row filed before migration 002 has a null role
+  // and an empty positions array; those are skipped rather than counted as a
+  // zero, so the totals describe people who actually answered.
+  const roleCount = {};
+  const positionCount = {};
+  approved.forEach((r) => {
+    if (r.role) roleCount[r.role] = (roleCount[r.role] || 0) + 1;
+    (r.positions || []).forEach((p) => { positionCount[p] = (positionCount[p] || 0) + 1; });
   });
 
   // Weapon demand still works, derived rather than stored: every class IS a
@@ -101,6 +114,11 @@ router.get('/pool', async (req, res) => {
     },
     weapons: WEAPONS.map((w) => ({ weapon: w, count: weaponCount[w] || 0 }))
       .sort((a, b) => b.count - a.count),
+    // Role spread: the number an organizer checks before closing signups,
+    // because a pool of sixty with four healers in it cannot field ten teams
+    // however many people are in it.
+    roles: ROLES.map((role) => ({ role, count: roleCount[role] || 0 })),
+    positions: POSITIONS.map((position) => ({ position, count: positionCount[position] || 0 })),
     classes: CLASS_NAMES
       .map((class_name) => ({
         class_name,
@@ -195,6 +213,8 @@ router.put('/mine', async (req, res) => {
   await audit(req.user, existing ? 'signup.update' : 'signup.create', data.id, {
     player_name: value.player_name,
     classes: value.classes,
+    role: value.role,
+    positions: value.positions,
   });
 
   res.json({ signup: data, created: !existing });
@@ -235,8 +255,15 @@ router.get('/options', (req, res) => {
   res.json({
     // Each class with the weapon pair it is, so a caller can label a pick
     // without shipping the whole lookup table to do it.
+    // Role spread: the number an organizer checks before closing signups,
+    // because a pool of sixty with four healers in it cannot field ten teams
+    // however many people are in it.
+    roles: ROLES.map((role) => ({ role, count: roleCount[role] || 0 })),
+    positions: POSITIONS.map((position) => ({ position, count: positionCount[position] || 0 })),
     classes: CLASS_NAMES.map((name) => ({ name, weapons: WEAPONS_FOR[name] || [] })),
     weapons: WEAPONS,
+    roles: ROLES,
+    positions: POSITIONS,
     nights: NIGHTS,
     maxClasses: 3,
   });

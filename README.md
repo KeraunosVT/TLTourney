@@ -242,6 +242,20 @@ edit means nobody updates their entry, which leaves captains drafting on stale i
 queue flags a row edited after it was decided. A *rejected* or *withdrawn* signup that comes back
 does re-enter the queue, or "rejected" would be a suggestion rather than a decision.
 
+**Role is one, positions are many.** A player picks Tank, DPS or Healer — one — because the question
+the draft asks is "what are you *for*", and a captain filling a healer slot wants the people who
+answer *healer*, not everyone who could heal at a pinch. The second and third class slots already
+carry "I can be moved onto this". Positions (Tank Party, Mainball Melee, Mainball Ranged, Killsquad)
+are genuinely not exclusive, so they're a multi-select with a select-all. Both lists live in
+[`shared/roles.cjs`](shared/roles.cjs) and are read by the form and the validator alike.
+
+**Signups filed before those fields existed say "not set", not "DPS".**
+[Migration 002](migrations/002_roles_and_positions.sql) deliberately backfills nothing. Stamping
+every pre-existing row with a default would put a role on a healer's signup that reads exactly like
+an answer they gave, and the first person harmed by it is the captain who drafts on it. A null is
+visibly missing; a wrong default is invisibly wrong. The form requires both fields from now on, so
+they fill in as people edit, and the queue flags the rows that haven't.
+
 **Closing signups freezes the pool.** `PUT /api/organizer/tournament {status:'draft'}` — after
 that, nothing can be filed or edited. A roster that changes underneath a running draft is how a
 captain ends up having drafted somebody who no longer exists.

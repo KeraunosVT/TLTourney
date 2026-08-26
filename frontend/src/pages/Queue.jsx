@@ -3,6 +3,16 @@ import api, { errorMessage } from '../api';
 import { weaponsLabel } from '@shared/classes.cjs';
 import { Panel, Pill, Button, Empty, Note } from '../components/ui';
 
+// The full names are long enough to force a horizontal scrollbar on the queue,
+// and an organizer reading down the column already knows what they mean.
+const SHORT = {
+  'Tank Party': 'Tank',
+  'Mainball Melee': 'MB Melee',
+  'Mainball Ranged': 'MB Ranged',
+  Killsquad: 'Kill',
+};
+const shortPosition = (p) => SHORT[p] || p;
+
 const TABS = [
   ['pending', 'Awaiting review'],
   ['approved', 'On the board'],
@@ -46,7 +56,9 @@ export default function Queue() {
         || (r.discord_username || '').toLowerCase().includes(needle)
         // Any of their classes matches, not just their main — "who can play
         // Templar" is a question you ask of the whole list.
-        || (r.classes || []).some((c) => c.toLowerCase().includes(needle)));
+        || (r.classes || []).some((c) => c.toLowerCase().includes(needle))
+        || (r.role || '').toLowerCase().includes(needle)
+        || (r.positions || []).some((p) => p.toLowerCase().includes(needle)));
   }, [rows, tab, q]);
 
   async function decide(row, decision) {
@@ -189,7 +201,7 @@ export default function Queue() {
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
-                {['Character', 'Discord', 'Main', 'Also plays', 'Nights', 'Filed', ''].map((h, i) => (
+                {['Character', 'Discord', 'Role', 'Main', 'Also plays', 'Positions', 'Nights', 'Filed', ''].map((h, i) => (
                   <th
                     key={h + i}
                     className="text-left px-3.5 py-2.5 whitespace-nowrap text-[10px] uppercase tracking-[0.1em]
@@ -203,7 +215,7 @@ export default function Queue() {
             <tbody>
               {shown.length === 0 && (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={9}>
                     <Empty>
                       {q ? 'Nothing matches that search.'
                         : tab === 'pending' ? 'Nothing waiting. Every signup is decided.'
@@ -224,9 +236,15 @@ export default function Queue() {
                   <td className="px-3.5 py-2.5 border-b border-line/50 text-ash whitespace-nowrap">
                     {r.discord_username || '—'}
                   </td>
-                  {/* Main and backups kept in separate columns. Run together
-                      they'd read as three equal picks, and the first one is
-                      the only one a captain drafts on. */}
+                  {/* Role, then main, then backups. A row filed before
+                      migration 002 has neither role nor positions — flagged
+                      rather than blanked, because "they never answered" and
+                      "they answered nothing" look identical otherwise. */}
+                  <td className="px-3.5 py-2.5 border-b border-line/50 whitespace-nowrap">
+                    {r.role
+                      ? <span className="font-medium">{r.role}</span>
+                      : <span className="text-oxblood text-xs">not set</span>}
+                  </td>
                   <td className="px-3.5 py-2.5 border-b border-line/50 whitespace-nowrap">
                     {(r.classes || [])[0] || <span className="text-ash">—</span>}
                     {(r.classes || [])[0] && (
@@ -235,6 +253,13 @@ export default function Queue() {
                   </td>
                   <td className="px-3.5 py-2.5 border-b border-line/50 text-ash text-xs whitespace-nowrap">
                     {(r.classes || []).slice(1).join(', ') || '—'}
+                  </td>
+                  <td className="px-3.5 py-2.5 border-b border-line/50 text-xs whitespace-nowrap">
+                    {(r.positions || []).length === 0
+                      ? <span className="text-oxblood">not set</span>
+                      : (r.positions.length === 4
+                          ? <span className="text-ash">all four</span>
+                          : <span className="text-ash">{r.positions.map(shortPosition).join(' · ')}</span>)}
                   </td>
                   <td className="px-3.5 py-2.5 border-b border-line/50 text-ash text-xs whitespace-nowrap">
                     {(r.nights || []).join(' ') || '—'}

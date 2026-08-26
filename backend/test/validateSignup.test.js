@@ -7,10 +7,13 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { validateSignup, NIGHTS, MAX_CLASSES } = require('../validateSignup');
 const { CLASS_NAMES } = require('../../shared/classes.cjs');
+const { ROLES, POSITIONS } = require('../../shared/roles.cjs');
 
 const good = () => ({
   player_name: 'Keraunos',
   classes: ['Ravager'],
+  role: 'DPS',
+  positions: ['Mainball Melee'],
   nights: ['Tue', 'Thu'],
   notes: 'Can flex to healer.',
   wants_captain: false,
@@ -115,6 +118,54 @@ test('MAX_CLASSES and the message agree', () => {
   assert.match(r.errors.classes, new RegExp(String(MAX_CLASSES)));
 });
 
+// ── Role ────────────────────────────────────────────────────────────────────
+test('each of the three roles is accepted', () => {
+  ROLES.forEach((r) => assert.ok(validateSignup({ ...good(), role: r }).ok, r));
+  assert.deepStrictEqual(ROLES, ['Tank', 'DPS', 'Healer']);
+});
+
+test('a missing or invented role is refused', () => {
+  assert.ok(!validateSignup({ ...good(), role: undefined }).ok);
+  assert.ok(!validateSignup({ ...good(), role: '' }).ok);
+  assert.ok(!validateSignup({ ...good(), role: 'Support' }).ok);
+  // Case matters — 'dps' stored where 'DPS' is expected matches no filter.
+  assert.ok(!validateSignup({ ...good(), role: 'dps' }).ok);
+});
+
+// ── Positions ───────────────────────────────────────────────────────────────
+test('one, several, and all four positions are accepted', () => {
+  assert.ok(validateSignup({ ...good(), positions: ['Killsquad'] }).ok);
+  assert.ok(validateSignup({ ...good(), positions: ['Tank Party', 'Killsquad'] }).ok);
+  assert.ok(validateSignup({ ...good(), positions: [...POSITIONS] }).ok);
+});
+
+test('POSITIONS COME BACK IN CANONICAL ORDER, not the order they were ticked', () => {
+  // Two people who can do the same things must store the same array, or the
+  // queue shows the same answer written two different ways and no grouping
+  // by position can ever line up.
+  const a = validateSignup({ ...good(), positions: ['Killsquad', 'Tank Party'] });
+  const b = validateSignup({ ...good(), positions: ['Tank Party', 'Killsquad'] });
+  assert.deepStrictEqual(a.value.positions, b.value.positions);
+  assert.deepStrictEqual(a.value.positions, ['Tank Party', 'Killsquad']);
+});
+
+test('duplicate positions collapse', () => {
+  const r = validateSignup({ ...good(), positions: ['Killsquad', 'Killsquad'] });
+  assert.deepStrictEqual(r.value.positions, ['Killsquad']);
+});
+
+test('no positions is refused, and an invented one is refused', () => {
+  assert.ok(!validateSignup({ ...good(), positions: [] }).ok);
+  assert.ok(!validateSignup({ ...good(), positions: undefined }).ok);
+  assert.ok(!validateSignup({ ...good(), positions: 'Killsquad' }).ok);   // not an array
+  assert.ok(!validateSignup({ ...good(), positions: ['Backline'] }).ok);
+});
+
+test('every position name is individually acceptable', () => {
+  POSITIONS.forEach((p) => assert.ok(validateSignup({ ...good(), positions: [p] }).ok, p));
+  assert.deepStrictEqual(POSITIONS, ['Tank Party', 'Mainball Melee', 'Mainball Ranged', 'Killsquad']);
+});
+
 // ── Nights ──────────────────────────────────────────────────────────────────
 test('nights come back in week order however they were sent', () => {
   const r = validateSignup({ ...good(), nights: ['Sun', 'Tue', 'Fri'] });
@@ -155,8 +206,11 @@ test('wants_captain accepts a real boolean and the string a form sends', () => {
 
 // ── Error shape ─────────────────────────────────────────────────────────────
 test('errors are keyed by field so the form can place each message', () => {
-  const r = validateSignup({ player_name: '', classes: [], nights: [] });
+  const r = validateSignup({ player_name: '', classes: [], role: '', positions: [], nights: [] });
   assert.ok(!r.ok);
-  assert.deepStrictEqual(Object.keys(r.errors).sort(), ['classes', 'nights', 'player_name']);
+  assert.deepStrictEqual(
+    Object.keys(r.errors).sort(),
+    ['classes', 'nights', 'player_name', 'positions', 'role']
+  );
   assert.strictEqual(r.value, undefined, 'no value when invalid');
 });
