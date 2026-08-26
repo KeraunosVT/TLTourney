@@ -121,6 +121,11 @@ create trigger player_signups_touch
 -- ── Seed the first tournament ───────────────────────────────────────────────
 -- Open for signups immediately, so the app has something to point at on first
 -- boot. Rename it on the organizer page; delete it if you'd rather start clean.
-insert into tournaments (name, status, roster_size)
-select 'Ashfall Invitational', 'signups', 6
+--
+-- roster_size is deliberately NOT set here. It defaults to 6 at this point and
+-- migration 003 turns it into a generated column over party_count, party_size
+-- and sub_count — naming it in this insert would break the day someone runs
+-- these migrations out of order, and the value would be overwritten anyway.
+insert into tournaments (name, status)
+select 'Season 2 Americas Draft Tournament', 'signups'
 where not exists (select 1 from tournaments);
