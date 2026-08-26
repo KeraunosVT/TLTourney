@@ -77,6 +77,31 @@ if (authConfigured && !botConfigured) {
 if (VERIFIED_ROLE_ID && !botConfigured) {
   console.warn('⚠️  DISCORD_VERIFIED_ROLE_ID is set but there is no bot token — nobody will be given the role.');
 }
+
+// ── The deadlock ────────────────────────────────────────────────────────────
+// These two variables do OPPOSITE things and are one word apart in name:
+//
+//   DISCORD_ALLOWED_ROLE_IDS  — the gate.  Checked BEFORE a login succeeds.
+//   DISCORD_VERIFIED_ROLE_ID  — the grant. Applied AFTER a login succeeds.
+//
+// Put the same role in both and nobody can ever sign in: the grant only runs
+// once the gate has passed, and the gate wants the role the grant would have
+// given. It locks out the entire server, including whoever configured it, and
+// the symptom is an ordinary "your roles don't let you sign in" that points
+// nowhere near the cause.
+//
+// Not auto-corrected — silently ignoring configuration is its own bug — but it
+// is shouted about at boot and reported by /api/auth/config.
+const ROLE_DEADLOCK = Boolean(VERIFIED_ROLE_ID && ALLOWED_ROLE_IDS.includes(VERIFIED_ROLE_ID));
+if (ROLE_DEADLOCK) {
+  console.error(
+    '\n🛑 CONFIGURATION DEADLOCK — NOBODY CAN SIGN IN.\n'
+    + `   DISCORD_VERIFIED_ROLE_ID (${VERIFIED_ROLE_ID}) is also in DISCORD_ALLOWED_ROLE_IDS.\n`
+    + '   The role is only granted AFTER a successful login, so it can never be the role\n'
+    + '   that PERMITS the login. Everyone is refused with auth=forbidden, forever.\n'
+    + '   Fix: leave DISCORD_ALLOWED_ROLE_IDS empty so any member of the server may sign in.\n'
+  );
+}
 if (VERIFIED_ROLE_ID) {
   console.log(`   → signing in grants role ${VERIFIED_ROLE_ID} (bot needs "Manage Roles", ranked above it)`);
 }
@@ -155,7 +180,10 @@ router.get('/discord/callback', async (req, res) => {
       console.warn(
         `Login refused: DISCORD_ALLOWED_ROLE_IDS is set to [${ALLOWED_ROLE_IDS.join(', ')}] `
         + `and this member holds [${held.join(', ')}] — no overlap (auth=forbidden). `
-        + 'Leave DISCORD_ALLOWED_ROLE_IDS empty to let any member of the server sign in.'
+        + (ROLE_DEADLOCK
+          ? 'THIS IS THE DEADLOCK: the allow-list contains the role that is only granted after '
+            + 'a successful login, so nobody will ever pass. Empty DISCORD_ALLOWED_ROLE_IDS.'
+          : 'Leave DISCORD_ALLOWED_ROLE_IDS empty to let any member of the server sign in.')
       );
       return res.redirect(`${APP_URL}?auth=forbidden`);
     }
@@ -196,6 +224,13 @@ router.get('/config', (req, res) => {
     organizer_roles_set: ADMIN_ROLE_IDS.length > 0,
     bot_configured: botConfigured,
     verified_role_set: !!VERIFIED_ROLE_ID,
+    // If this is true, nothing else on this page matters — see the boot log.
+    role_deadlock: ROLE_DEADLOCK,
+    ...(ROLE_DEADLOCK && {
+      role_deadlock_fix: 'DISCORD_VERIFIED_ROLE_ID is also in DISCORD_ALLOWED_ROLE_IDS. '
+        + 'The role is granted only after a successful login, so it can never be the role that '
+        + 'permits one. Empty DISCORD_ALLOWED_ROLE_IDS.',
+    }),
   });
 });
 
