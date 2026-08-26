@@ -15,6 +15,7 @@ const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { router: authRouter, requireAuth, requireOrganizer, authConfigured } = require('./auth');
 const signupsRouter = require('./signups');
 const organizerRouter = require('./organizer');
+const teams = require('./teams');
 const { currentTournament, supabase } = require('./db');
 
 const app = express();
@@ -95,6 +96,8 @@ const writeLimiter = rateLimit({
 });
 
 app.use('/api/signup', (req, res, next) => (req.method === 'GET' ? next() : writeLimiter(req, res, next)), signupsRouter);
+app.use('/api/teams', teams.publicRouter);
+app.use('/api/organizer/teams', requireOrganizer, teams.organizerRouter);
 app.use('/api/organizer', requireOrganizer, organizerRouter);
 
 // ── Static frontend ─────────────────────────────────────────────────────────

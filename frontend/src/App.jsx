@@ -6,6 +6,7 @@ import { Sigil } from './components/Brand';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Queue from './pages/Queue';
+import Teams from './pages/Teams';
 
 function Shell() {
   const { user, logout } = useAuth();
@@ -37,6 +38,7 @@ function Shell() {
         <div className="flex md:flex-col gap-1 flex-1 md:flex-none">
           <NavLink to="/signup" className={link}>Sign up</NavLink>
           {user?.isOrganizer && <NavLink to="/queue" className={link}>Approval queue</NavLink>}
+          {user?.isOrganizer && <NavLink to="/teams" className={link}>Teams</NavLink>}
         </div>
         <div className="md:mt-auto px-2 flex md:flex-col items-center md:items-start gap-2 text-xs text-ash">
           <span className="whitespace-nowrap">
@@ -89,6 +91,7 @@ export default function App() {
             <Route index element={<Navigate to="/signup" replace />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/queue" element={<OrganizerOnly><Queue /></OrganizerOnly>} />
+            <Route path="/teams" element={<OrganizerOnly><Teams /></OrganizerOnly>} />
             <Route path="*" element={<Navigate to="/signup" replace />} />
           </Route>
         </Routes>
