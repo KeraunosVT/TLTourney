@@ -1,42 +1,38 @@
 // Signup validation. The rule for what earns a test here is Gear-Gap's: cover
 // the logic where a mistake produces a PLAUSIBLE WRONG ANSWER rather than an
-// error. A gear level that silently becomes 0, a class taken from the request
-// body instead of derived, nights stored in whatever order they arrived —
-// none of those throw, and all of them are wrong in ways nobody would spot.
+// error. A class that isn't in the game stored as though it were, preference
+// order silently reshuffled, a duplicate counted twice in the pool — none of
+// those throw, and all of them are wrong in ways nobody would spot.
 const test = require('node:test');
 const assert = require('node:assert');
-const { validateSignup, NIGHTS, GEAR_MAX } = require('../validateSignup');
+const { validateSignup, NIGHTS, MAX_CLASSES } = require('../validateSignup');
+const { CLASS_NAMES } = require('../../shared/classes.cjs');
 
 const good = () => ({
   player_name: 'Keraunos',
-  weapon_1: 'Greatsword',
-  weapon_2: 'Dagger',
-  gear_level: 5140,
+  classes: ['Ravager'],
   nights: ['Tue', 'Thu'],
   notes: 'Can flex to healer.',
   wants_captain: false,
 });
 
-test('a complete signup passes and derives its class', () => {
+test('a complete signup passes', () => {
   const r = validateSignup(good());
   assert.ok(r.ok, JSON.stringify(r.errors));
-  assert.strictEqual(r.value.class_name, 'Ravager');
-  assert.strictEqual(r.value.gear_level, 5140);
+  assert.deepStrictEqual(r.value.classes, ['Ravager']);
 });
 
-test('the class is DERIVED, never taken from the body', () => {
-  // Someone posting class_name: 'Paladin' with Greatsword+Dagger must still be
-  // stored as a Ravager. This is the field a captain sorts on.
-  const r = validateSignup({ ...good(), class_name: 'Paladin' });
-  assert.ok(r.ok);
-  assert.strictEqual(r.value.class_name, 'Ravager');
-});
-
-test('discord_id in the body is ignored — identity comes from the session', () => {
+test('discord_id and status in the body are ignored', () => {
   const r = validateSignup({ ...good(), discord_id: '99999', status: 'approved' });
   assert.ok(r.ok);
   assert.strictEqual(r.value.discord_id, undefined);
   assert.strictEqual(r.value.status, undefined);
+});
+
+test('gear_level is gone — sending one changes nothing', () => {
+  const r = validateSignup({ ...good(), gear_level: 5140 });
+  assert.ok(r.ok);
+  assert.strictEqual(r.value.gear_level, undefined);
 });
 
 // ── Name ────────────────────────────────────────────────────────────────────
@@ -52,46 +48,71 @@ test('an over-long name is refused rather than silently truncated', () => {
   assert.ok(r.errors.player_name);
 });
 
-// ── Weapons ─────────────────────────────────────────────────────────────────
-test('two of the same weapon is refused', () => {
-  const r = validateSignup({ ...good(), weapon_1: 'Dagger', weapon_2: 'Dagger' });
+// ── Classes ─────────────────────────────────────────────────────────────────
+test('one, two and three classes are all accepted', () => {
+  assert.ok(validateSignup({ ...good(), classes: ['Ravager'] }).ok);
+  assert.ok(validateSignup({ ...good(), classes: ['Ravager', 'Paladin'] }).ok);
+  assert.ok(validateSignup({ ...good(), classes: ['Ravager', 'Paladin', 'Templar'] }).ok);
+});
+
+test('a fourth class is refused', () => {
+  const r = validateSignup({ ...good(), classes: ['Ravager', 'Paladin', 'Templar', 'Oracle'] });
   assert.ok(!r.ok);
-  assert.match(r.errors.weapons, /different/i);
+  assert.match(r.errors.classes, /at most 3/i);
 });
 
-test('a weapon that is not in the game is refused', () => {
-  assert.ok(!validateSignup({ ...good(), weapon_2: 'Trebuchet' }).ok);
-  assert.ok(!validateSignup({ ...good(), weapon_1: '' }).ok);
-});
-
-test('weapon order does not change the class', () => {
-  const a = validateSignup({ ...good(), weapon_1: 'Greatsword', weapon_2: 'Dagger' });
-  const b = validateSignup({ ...good(), weapon_1: 'Dagger', weapon_2: 'Greatsword' });
-  assert.strictEqual(a.value.class_name, b.value.class_name);
-});
-
-// ── Gear level ──────────────────────────────────────────────────────────────
-// The whole point: none of these may quietly become 0.
-test('a blank or non-numeric gear level is refused, not coerced to 0', () => {
-  for (const bad of ['', '   ', 'abc', null, undefined, {}, NaN]) {
-    const r = validateSignup({ ...good(), gear_level: bad });
-    assert.ok(!r.ok, `${JSON.stringify(bad)} should be refused`);
-    assert.ok(r.errors.gear_level, `${JSON.stringify(bad)} should name the gear field`);
-  }
-});
-
-test('a numeric string is accepted and becomes a number', () => {
-  const r = validateSignup({ ...good(), gear_level: '4820' });
+test('PREFERENCE ORDER IS PRESERVED — the first class is their main', () => {
+  // The single most damaging silent bug available here: sorting these would
+  // quietly reassign everybody's main class, and every row would still look
+  // perfectly valid.
+  const picked = ['Templar', 'Archon', 'Ravager'];   // deliberately not alphabetical
+  const r = validateSignup({ ...good(), classes: picked });
   assert.ok(r.ok);
-  assert.strictEqual(r.value.gear_level, 4820);
+  assert.deepStrictEqual(r.value.classes, picked);
 });
 
-test('fractional and out-of-range gear levels are refused', () => {
-  assert.ok(!validateSignup({ ...good(), gear_level: 5140.5 }).ok);
-  assert.ok(!validateSignup({ ...good(), gear_level: -1 }).ok);
-  assert.ok(!validateSignup({ ...good(), gear_level: GEAR_MAX + 1 }).ok);
-  assert.ok(validateSignup({ ...good(), gear_level: 0 }).ok);
-  assert.ok(validateSignup({ ...good(), gear_level: GEAR_MAX }).ok);
+test('no classes at all is refused', () => {
+  assert.ok(!validateSignup({ ...good(), classes: [] }).ok);
+  assert.ok(!validateSignup({ ...good(), classes: undefined }).ok);
+  assert.ok(!validateSignup({ ...good(), classes: 'Ravager' }).ok);   // not an array
+});
+
+test('empty slots are dropped, not rejected — the 2nd and 3rd are optional', () => {
+  const r = validateSignup({ ...good(), classes: ['Ravager', '', '  '] });
+  assert.ok(r.ok, JSON.stringify(r.errors));
+  assert.deepStrictEqual(r.value.classes, ['Ravager']);
+});
+
+test('a class that is not in the game is refused, not stored', () => {
+  const r = validateSignup({ ...good(), classes: ['Ravager', 'Battlemage'] });
+  assert.ok(!r.ok);
+  assert.match(r.errors.classes, /Battlemage/);
+});
+
+test('a duplicate is reported rather than silently collapsed', () => {
+  const r = validateSignup({ ...good(), classes: ['Ravager', 'Ravager'] });
+  assert.ok(!r.ok);
+  assert.match(r.errors.classes, /twice/i);
+});
+
+test('class names are case- and whitespace-sensitive to the real list', () => {
+  // "ravager" is not a class; accepting it would put a name in the database
+  // that no lookup elsewhere would match.
+  assert.ok(!validateSignup({ ...good(), classes: ['ravager'] }).ok);
+  assert.ok(validateSignup({ ...good(), classes: ['  Ravager  '] }).ok, 'but padding is trimmed');
+});
+
+test('every one of the 45 classes is individually acceptable', () => {
+  const rejected = CLASS_NAMES.filter((c) => !validateSignup({ ...good(), classes: [c] }).ok);
+  assert.deepStrictEqual(rejected, [], 'these real classes were refused');
+  assert.strictEqual(CLASS_NAMES.length, 45);
+});
+
+test('MAX_CLASSES and the message agree', () => {
+  const tooMany = CLASS_NAMES.slice(0, MAX_CLASSES + 1);
+  const r = validateSignup({ ...good(), classes: tooMany });
+  assert.ok(!r.ok);
+  assert.match(r.errors.classes, new RegExp(String(MAX_CLASSES)));
 });
 
 // ── Nights ──────────────────────────────────────────────────────────────────
@@ -107,7 +128,7 @@ test('duplicate nights collapse', () => {
 
 test('no nights at all is refused, and a made-up night is refused', () => {
   assert.ok(!validateSignup({ ...good(), nights: [] }).ok);
-  assert.ok(!validateSignup({ ...good(), nights: 'Tue' }).ok);       // not an array
+  assert.ok(!validateSignup({ ...good(), nights: 'Tue' }).ok);
   assert.ok(!validateSignup({ ...good(), nights: ['Funday'] }).ok);
 });
 
@@ -134,11 +155,8 @@ test('wants_captain accepts a real boolean and the string a form sends', () => {
 
 // ── Error shape ─────────────────────────────────────────────────────────────
 test('errors are keyed by field so the form can place each message', () => {
-  const r = validateSignup({ player_name: '', weapon_1: 'Dagger', weapon_2: 'Dagger', gear_level: 'x', nights: [] });
+  const r = validateSignup({ player_name: '', classes: [], nights: [] });
   assert.ok(!r.ok);
-  assert.deepStrictEqual(
-    Object.keys(r.errors).sort(),
-    ['gear_level', 'nights', 'player_name', 'weapons']
-  );
+  assert.deepStrictEqual(Object.keys(r.errors).sort(), ['classes', 'nights', 'player_name']);
   assert.strictEqual(r.value, undefined, 'no value when invalid');
 });

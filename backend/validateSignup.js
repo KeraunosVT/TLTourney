@@ -3,24 +3,21 @@
 // Pulled out of the route so it can be tested: server.js calls app.listen() at
 // require time, which makes anything defined in it unreachable from a test.
 // This is also the part where a mistake produces a PLAUSIBLE WRONG ANSWER
-// rather than an error — a gear level that silently becomes 0, a class derived
-// from weapons the caller made up — which is Gear-Gap's rule for what earns a
-// test.
+// rather than an error — a class that isn't in the game stored as though it
+// were, a duplicate silently counted twice in the pool — which is Gear-Gap's
+// rule for what earns a test.
 //
-// Two things are deliberately NOT taken from the body:
-//   · discord_id  — comes from the session. A signup filed as someone else is
-//                   the whole reason this app has a login.
-//   · class_name  — derived here from the weapons. The browser shows a class
-//                   while you pick; that is a convenience, not an input.
+// One thing is deliberately NOT taken from the body:
+//   · discord_id — comes from the session. A signup filed as someone else is
+//                  the whole reason this app has a login.
 
-const { WEAPONS, classify, isWeapon } = require('../shared/classes.cjs');
+const { CLASS_NAMES, isClass } = require('../shared/classes.cjs');
 
 const NIGHTS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const NAME_MAX = 32;      // matches the CHECK constraint in migration 001
 const NOTES_MAX = 500;    // ditto
-const GEAR_MIN = 0;
-const GEAR_MAX = 20000;   // generous on purpose — gear inflates every patch
+const MAX_CLASSES = 3;    // ditto
 
 /**
  * @param {object} body   The raw request body.
@@ -39,47 +36,45 @@ function validateSignup(body = {}) {
     errors.player_name = `That's longer than ${NAME_MAX} characters — use the name exactly as it appears in game.`;
   }
 
-  // ── Weapons ───────────────────────────────────────────────────────────────
-  const weapon_1 = String(body.weapon_1 ?? '').trim();
-  const weapon_2 = String(body.weapon_2 ?? '').trim();
-  let class_name = null;
+  // ── Classes ───────────────────────────────────────────────────────────────
+  // One to three, in preference order, no repeats. Order is meaningful — the
+  // first is their main — so this deliberately does NOT sort, unlike nights.
+  //
+  // Blanks are dropped rather than rejected: the form offers three dropdowns
+  // and the second and third are optional, so an unfilled one arrives as ''.
+  // That is a person leaving a field alone, not an error to report at them.
+  const rawClasses = Array.isArray(body.classes) ? body.classes : [];
+  const cleaned = rawClasses.map((c) => String(c ?? '').trim()).filter(Boolean);
 
-  if (!isWeapon(weapon_1) || !isWeapon(weapon_2)) {
-    errors.weapons = `Pick two weapons from: ${WEAPONS.join(', ')}.`;
-  } else if (weapon_1 === weapon_2) {
-    errors.weapons = 'Pick two different weapons — every class in the game is a pair.';
-  } else {
-    class_name = classify(weapon_1, weapon_2);
-    // All 45 pairs of 10 weapons resolve, so reaching here means the table and
-    // the weapon list have fallen out of step with each other. Say so plainly
-    // rather than writing a null class into the row.
-    if (!class_name) {
-      errors.weapons = `No class is recorded for ${weapon_1} + ${weapon_2}.`;
-    }
+  const classes = [];
+  const seen = new Set();
+  let duplicate = null;
+  let unknown = null;
+  for (const c of cleaned) {
+    if (!isClass(c)) { unknown = unknown || c; continue; }
+    if (seen.has(c)) { duplicate = duplicate || c; continue; }
+    seen.add(c);
+    classes.push(c);
   }
 
-  // ── Gear level ────────────────────────────────────────────────────────────
-  // Rejected rather than coerced. `Number('')` is 0 and `parseInt('abc')` is
-  // NaN→0 in the obvious implementation, and a silent 0 puts the player at the
-  // bottom of every captain's board without anyone being told why.
-  //
-  // The empty check is on the TRIMMED string, not the raw value. `'   '` trims
-  // to `''`, and `Number('')` is 0 — so testing the raw value lets a field
-  // containing only spaces through as a gear level of zero.
-  const rawGear = body.gear_level;
-  const trimmedGear = typeof rawGear === 'number' ? rawGear : String(rawGear ?? '').trim();
-  const gear_level = typeof trimmedGear === 'number' ? trimmedGear : Number(trimmedGear);
-  if (trimmedGear === '' || rawGear === null || rawGear === undefined || !Number.isFinite(gear_level)) {
-    errors.gear_level = 'Enter your gear level as a number.';
-  } else if (!Number.isInteger(gear_level)) {
-    errors.gear_level = 'Gear level is a whole number.';
-  } else if (gear_level < GEAR_MIN || gear_level > GEAR_MAX) {
-    errors.gear_level = `Gear level should be between ${GEAR_MIN} and ${GEAR_MAX}.`;
+  if (!Array.isArray(body.classes)) {
+    errors.classes = 'Pick at least one class.';
+  } else if (unknown) {
+    errors.classes = `"${unknown}" isn't a class in the game.`;
+  } else if (duplicate) {
+    // Reported rather than quietly de-duplicated. Picking the same class twice
+    // means the form let them, and silently collapsing it hides that.
+    errors.classes = `You picked ${duplicate} twice — each slot should be a different class.`;
+  } else if (classes.length === 0) {
+    errors.classes = 'Pick at least one class.';
+  } else if (classes.length > MAX_CLASSES) {
+    errors.classes = `Pick at most ${MAX_CLASSES} classes.`;
   }
 
   // ── Nights ────────────────────────────────────────────────────────────────
   // Deduped and put back in week order, so two signups that picked the same
-  // nights in a different order store the same array.
+  // nights in a different order store the same array. Unlike classes, order
+  // carries no meaning here — Tuesday is not a preference over Thursday.
   const rawNights = Array.isArray(body.nights) ? body.nights : [];
   const nights = NIGHTS.filter((n) => rawNights.includes(n));
   if (rawNights.some((n) => !NIGHTS.includes(n))) {
@@ -102,10 +97,7 @@ function validateSignup(body = {}) {
     errors: {},
     value: {
       player_name,
-      weapon_1,
-      weapon_2,
-      class_name,
-      gear_level,
+      classes,
       nights,
       notes,
       wants_captain: body.wants_captain === true || body.wants_captain === 'true',
@@ -113,4 +105,4 @@ function validateSignup(body = {}) {
   };
 }
 
-module.exports = { validateSignup, NIGHTS, NAME_MAX, NOTES_MAX, GEAR_MIN, GEAR_MAX };
+module.exports = { validateSignup, NIGHTS, CLASS_NAMES, NAME_MAX, NOTES_MAX, MAX_CLASSES };

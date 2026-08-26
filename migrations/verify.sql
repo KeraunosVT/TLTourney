@@ -25,9 +25,22 @@ select '001 · one signup per person per tournament',
        exists (select 1 from pg_constraint
                where conname = 'player_signups_one_per_person')
 union all
-select '001 · weapons must differ',
+select '001 · between 1 and 3 classes',
        exists (select 1 from pg_constraint
-               where conname = 'player_signups_distinct_weapons')
+               where conname = 'player_signups_class_count')
+union all
+select '001 · classes column is a text array',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'player_signups'
+                 and column_name = 'classes' and data_type = 'ARRAY')
+union all
+-- Gear level was removed. If this column is still here the old migration ran
+-- and the table needs recreating, which the app will not tell you — it just
+-- writes rows without it.
+select '001 · gear_level is GONE',
+       not exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'player_signups'
+                     and column_name = 'gear_level')
 union all
 select '001 · updated_at trigger',
        exists (select 1 from pg_trigger

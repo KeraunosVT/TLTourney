@@ -38,13 +38,19 @@ create table if not exists player_signups (
   discord_username text,
 
   player_name      text not null check (length(btrim(player_name)) between 1 and 32),
-  weapon_1         text not null,
-  weapon_2         text not null,
-  -- Derived from the weapon pair server-side and stored so the pool can be
-  -- queried and sorted by class. Recomputed on every write, so it cannot drift
-  -- from the weapons it came from.
-  class_name       text not null,
-  gear_level       int  not null check (gear_level between 0 and 20000),
+
+  -- Up to three classes, in preference order: classes[1] is their main.
+  -- An ordered array rather than three columns, because "their second class" is
+  -- not a different KIND of fact from "their first" — three columns would mean
+  -- three sets of null-handling everywhere and a rule about whether class_2 may
+  -- be set while class_1 is null.
+  --
+  -- Membership of the real 45-class list, and de-duplication, are enforced in
+  -- backend/validateSignup.js rather than here: a CHECK cannot run a subquery,
+  -- so expressing "every element is one of these 45" in SQL means pasting the
+  -- list into the schema, where it would drift from shared/weaponClasses.json.
+  -- One list, in one place, with tests on it.
+  classes          text[] not null,
   nights           text[] not null default '{}',
   notes            text check (notes is null or length(notes) <= 500),
   wants_captain    boolean not null default false,
@@ -61,13 +67,22 @@ create table if not exists player_signups (
   -- One signup per person per tournament. Without this, a double-submitted form
   -- puts the same player on the board twice and two captains can draft them.
   constraint player_signups_one_per_person unique (tournament_id, discord_id),
-  -- A class is a PAIR. Two of the same weapon is not a build in this game, and
-  -- the derive step has no answer for it.
-  constraint player_signups_distinct_weapons check (weapon_1 <> weapon_2)
+
+  -- At least one class, at most three. The count is checkable in SQL even
+  -- though membership isn't, and it is the half that protects the draft board:
+  -- an empty array would put somebody in the pool playing nothing.
+  -- array_length returns NULL, not 0, for an empty array — hence coalesce.
+  constraint player_signups_class_count
+    check (coalesce(array_length(classes, 1), 0) between 1 and 3)
 );
 
 create index if not exists player_signups_tournament_status_idx
   on player_signups (tournament_id, status);
+
+-- "Who can play Ravager?" is the question captains ask of this table, and it is
+-- an array containment test — which a btree index cannot serve.
+create index if not exists player_signups_classes_idx
+  on player_signups using gin (classes);
 
 -- Case-insensitive lookup of an in-game name, for matching scoreboard rows to
 -- signups later. Not unique: two people genuinely can pick the same name across

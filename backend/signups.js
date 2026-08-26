@@ -6,14 +6,14 @@
 const express = require('express');
 const { supabase, currentTournament, audit } = require('./db');
 const { validateSignup, NIGHTS } = require('./validateSignup');
-const { WEAPONS } = require('../shared/classes.cjs');
+const { WEAPONS, WEAPONS_FOR, CLASS_NAMES } = require('../shared/classes.cjs');
 
 const router = express.Router();
 
 // Fields the player is allowed to see about their own signup. `decision_note`
 // is included on purpose: being told why you were turned down is the difference
 // between fixing it and resubmitting the same thing.
-const MINE = 'id, player_name, weapon_1, weapon_2, class_name, gear_level, nights, notes, wants_captain, status, decision_note, created_at, updated_at';
+const MINE = 'id, player_name, classes, nights, notes, wants_captain, status, decision_note, created_at, updated_at';
 
 // Signups may only be created or changed while the tournament says so. Once the
 // draft opens the pool is frozen — a roster that changes underneath a running
@@ -52,7 +52,7 @@ router.get('/pool', async (req, res) => {
 
   const { data, error } = await supabase
     .from('player_signups')
-    .select('status, weapon_1, weapon_2, class_name')
+    .select('status, classes')
     .eq('tournament_id', t.id);
 
   if (error) {
@@ -63,12 +63,27 @@ router.get('/pool', async (req, res) => {
   const rows = data || [];
   const approved = rows.filter((r) => r.status === 'approved');
 
-  // Weapon demand, most-signed first. A player deciding what to bring wants to
-  // know what's already thick on the ground.
-  const weaponCount = {};
+  // Class demand. Counted TWICE over, because the two counts answer different
+  // questions and conflating them misleads:
+  //   · `count`  — anyone who lists it at all, i.e. who could be asked to play it
+  //   · `mains`  — people whose FIRST pick it is, i.e. who actually plays it
+  // A class ten people list as a third option is not a class ten people play.
+  const classCount = {};
+  const mainCount = {};
   approved.forEach((r) => {
-    weaponCount[r.weapon_1] = (weaponCount[r.weapon_1] || 0) + 1;
-    weaponCount[r.weapon_2] = (weaponCount[r.weapon_2] || 0) + 1;
+    (r.classes || []).forEach((c, i) => {
+      classCount[c] = (classCount[c] || 0) + 1;
+      if (i === 0) mainCount[c] = (mainCount[c] || 0) + 1;
+    });
+  });
+
+  // Weapon demand still works, derived rather than stored: every class IS a
+  // weapon pair, so the roster's weapon spread falls out of the class picks.
+  // Counted on mains only — a player's third-choice class says little about
+  // what they'll actually bring.
+  const weaponCount = {};
+  Object.entries(mainCount).forEach(([cls, n]) => {
+    (WEAPONS_FOR[cls] || []).forEach((w) => { weaponCount[w] = (weaponCount[w] || 0) + n; });
   });
 
   res.json({
@@ -86,9 +101,13 @@ router.get('/pool', async (req, res) => {
     },
     weapons: WEAPONS.map((w) => ({ weapon: w, count: weaponCount[w] || 0 }))
       .sort((a, b) => b.count - a.count),
-    classes: Object.entries(
-      approved.reduce((acc, r) => { acc[r.class_name] = (acc[r.class_name] || 0) + 1; return acc; }, {})
-    ).map(([class_name, count]) => ({ class_name, count }))
+    classes: CLASS_NAMES
+      .map((class_name) => ({
+        class_name,
+        count: classCount[class_name] || 0,
+        mains: mainCount[class_name] || 0,
+      }))
+      .filter((c) => c.count > 0)
       .sort((a, b) => b.count - a.count || a.class_name.localeCompare(b.class_name)),
   });
 });
@@ -175,8 +194,7 @@ router.put('/mine', async (req, res) => {
 
   await audit(req.user, existing ? 'signup.update' : 'signup.create', data.id, {
     player_name: value.player_name,
-    class_name: value.class_name,
-    gear_level: value.gear_level,
+    classes: value.classes,
   });
 
   res.json({ signup: data, created: !existing });
@@ -214,7 +232,14 @@ router.delete('/mine', async (req, res) => {
 // from the same source the validator checks against, so the form can never
 // offer an option the server would reject.
 router.get('/options', (req, res) => {
-  res.json({ weapons: WEAPONS, nights: NIGHTS });
+  res.json({
+    // Each class with the weapon pair it is, so a caller can label a pick
+    // without shipping the whole lookup table to do it.
+    classes: CLASS_NAMES.map((name) => ({ name, weapons: WEAPONS_FOR[name] || [] })),
+    weapons: WEAPONS,
+    nights: NIGHTS,
+    maxClasses: 3,
+  });
 });
 
 module.exports = router;

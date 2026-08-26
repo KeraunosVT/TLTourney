@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import api, { errorMessage, fieldErrors } from '../api';
 import { useAuth } from '../auth';
-import { classify, WEAPONS } from '@shared/classes.cjs';
+import { CLASS_NAMES, weaponsLabel } from '@shared/classes.cjs';
 import { Panel, Pill, Button, Field, Tile, Note } from '../components/ui';
 
 const NIGHTS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+// Three ordered slots rather than a multi-select, because the order carries
+// meaning: the first is what you actually play, and captains draft on that.
+// A checkbox grid of 45 classes would collect the same three names while
+// throwing away which one is your main.
+const SLOTS = [
+  { key: 0, label: 'Main class', required: true, hint: 'What you play. Captains draft on this one.' },
+  { key: 1, label: 'Second class', required: false, hint: 'Something you can be moved onto.' },
+  { key: 2, label: 'Third class', required: false, hint: null },
+];
 
 const STATUS_PILL = {
   pending: ['brass', 'Awaiting review'],
@@ -27,11 +37,12 @@ export default function Signup() {
 
   // The form's own state. Seeded from an existing signup when there is one, so
   // editing starts from what you filed rather than from blank.
+  // classes is always length 3 in the FORM — one entry per dropdown, '' for an
+  // untouched one — and gets compacted on submit. Holding it dense here would
+  // mean the third dropdown's value moving when you clear the second.
   const [form, setForm] = useState({
     player_name: '',
-    weapon_1: 'Greatsword',
-    weapon_2: 'Dagger',
-    gear_level: '',
+    classes: ['', '', ''],
     nights: [],
     notes: '',
     wants_captain: false,
@@ -44,9 +55,22 @@ export default function Signup() {
     setErrors((e) => {
       const next = { ...e };
       delete next[k];
-      if (k === 'weapon_1' || k === 'weapon_2') delete next.weapons;
       return next;
     });
+  };
+
+  const setClass = (slot, value) => {
+    const next = [...form.classes];
+    next[slot] = value;
+    // Clearing a slot pulls the ones below it up, so you can't end up with a
+    // third class and no second — which the server would accept but which
+    // reads as though a pick went missing.
+    if (!value) {
+      const kept = next.filter(Boolean);
+      set('classes', [kept[0] || '', kept[1] || '', kept[2] || '']);
+    } else {
+      set('classes', next);
+    }
   };
 
   useEffect(() => {
@@ -64,11 +88,11 @@ export default function Signup() {
         if (mine.data.signup) {
           const s = mine.data.signup;
           setSignup(s);
+          const saved = s.classes || [];
           setForm({
             player_name: s.player_name,
-            weapon_1: s.weapon_1,
-            weapon_2: s.weapon_2,
-            gear_level: String(s.gear_level),
+            // Padded back out to three slots — the stored array is compact.
+            classes: [saved[0] || '', saved[1] || '', saved[2] || ''],
             nights: s.nights || [],
             notes: s.notes || '',
             wants_captain: !!s.wants_captain,
@@ -86,18 +110,12 @@ export default function Signup() {
     return () => { alive = false; };
   }, [user]);
 
-  // The whole point of this form: the class follows from the weapon pair, so it
-  // is never asked for. Computed with the same shared/classes.cjs the server
-  // derives it with, which is why the two can't disagree.
-  const derived = useMemo(() => {
-    if (form.weapon_1 === form.weapon_2) {
-      return { ok: false, text: 'Pick two different weapons', why: 'Every class in the game is a pair.' };
-    }
-    const name = classify(form.weapon_1, form.weapon_2);
-    if (!name) return { ok: false, text: 'No class for that pair', why: 'That combination isn\'t in the class table.' };
-    const peers = pool?.classes?.find((c) => c.class_name === name)?.count ?? 0;
-    return { ok: true, name, peers };
-  }, [form.weapon_1, form.weapon_2, pool]);
+  // What they've actually picked, in order, blanks removed.
+  const picked = useMemo(() => form.classes.filter(Boolean), [form.classes]);
+
+  // How many others main each of their picks — the number worth knowing before
+  // you commit, since it's roughly your odds of being the one drafted for it.
+  const mainsFor = (name) => pool?.classes?.find((c) => c.class_name === name)?.mains ?? 0;
 
   const toggleNight = (n) =>
     set('nights', form.nights.includes(n) ? form.nights.filter((x) => x !== n) : [...form.nights, n]);
@@ -110,7 +128,9 @@ export default function Signup() {
     try {
       const { data } = await api.put('/api/signup/mine', {
         ...form,
-        gear_level: form.gear_level,
+        // Compacted on the way out: the form holds three slots, the row holds
+        // only what was actually chosen.
+        classes: picked,
       });
       setSignup(data.signup);
       setBanner({
@@ -205,81 +225,59 @@ export default function Signup() {
             </Field>
 
             <Field
-              label="Weapons"
-              error={errors.weapons}
-              hint="Your class follows from the pair — the game decides it, so we don't ask."
+              label="Classes you play"
+              error={errors.classes}
+              hint="Up to three, in order. Only the first is required."
             >
-              <div className="flex items-center gap-2.5">
-                <select
-                  className="field-input"
-                  aria-label="First weapon"
-                  value={form.weapon_1}
-                  onChange={(e) => set('weapon_1', e.target.value)}
-                  disabled={locked}
-                >
-                  {WEAPONS.map((w) => <option key={w}>{w}</option>)}
-                </select>
-                <span className="text-ash">+</span>
-                <select
-                  className="field-input"
-                  aria-label="Second weapon"
-                  value={form.weapon_2}
-                  onChange={(e) => set('weapon_2', e.target.value)}
-                  disabled={locked}
-                >
-                  {WEAPONS.map((w) => <option key={w}>{w}</option>)}
-                </select>
-              </div>
-            </Field>
+              <div className="flex flex-col gap-3">
+                {SLOTS.map((slot) => {
+                  const value = form.classes[slot.key] || '';
+                  // A class chosen in another slot is removed from this one's
+                  // options, so picking the same thing twice isn't offered.
+                  // The current value stays listed or the select would blank.
+                  const taken = form.classes.filter((c, i) => c && i !== slot.key);
+                  const options = CLASS_NAMES.filter((c) => !taken.includes(c));
+                  // The third slot is pointless until the second is filled —
+                  // it would just be a gap the submit handler closes anyway.
+                  const disabled = locked
+                    || (slot.key === 2 && !form.classes[1])
+                    || (slot.key === 1 && !form.classes[0]);
 
-            {/* The derived class, shown as you pick. */}
-            <div
-              className={`rounded border px-4 py-3.5 flex items-center justify-between gap-4 flex-wrap ${
-                derived.ok
-                  ? 'border-brass/45 bg-gradient-to-r from-brass/12 to-panelup/50'
-                  : 'border-oxblood/55 bg-oxblooddeep'
-              }`}
-            >
-              <div>
-                <div className="eyebrow mb-1">{derived.ok ? 'Your class' : 'No class'}</div>
-                {derived.ok ? (
-                  <>
-                    <div className="font-display text-[26px] leading-tight">{derived.name}</div>
-                    <div className="text-xs text-ash mt-0.5">{form.weapon_1} · {form.weapon_2}</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="font-display text-[17px] text-oxblood">{derived.text}</div>
-                    <div className="text-xs text-ash mt-0.5">{derived.why}</div>
-                  </>
-                )}
+                  return (
+                    <div key={slot.key} className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <span className="text-[11px] text-ash w-[92px] flex-none">
+                          {slot.label}
+                          {slot.required && <span className="text-brass"> *</span>}
+                        </span>
+                        <select
+                          className="field-input flex-1 min-w-[180px]"
+                          aria-label={slot.label}
+                          value={value}
+                          onChange={(e) => setClass(slot.key, e.target.value)}
+                          disabled={disabled}
+                        >
+                          <option value="">{slot.required ? '— pick a class —' : '— none —'}</option>
+                          {options.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </div>
+                      {value && (
+                        <div className="text-[11px] text-ash pl-[102px] flex gap-3 flex-wrap">
+                          <span>{weaponsLabel(value)}</span>
+                          <span className="text-ash/70">
+                            {mainsFor(value) === 0
+                              ? 'nobody mains this yet'
+                              : `${mainsFor(value)} ${mainsFor(value) === 1 ? 'other mains' : 'others main'} it`}
+                          </span>
+                        </div>
+                      )}
+                      {!value && slot.hint && !disabled && (
+                        <div className="text-[11px] text-ash/70 pl-[102px]">{slot.hint}</div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              {derived.ok && (
-                <div className="text-right text-xs text-ash">
-                  <b className="block mono text-[19px] text-bone font-medium">{derived.peers}</b>
-                  others in the pool
-                </div>
-              )}
-            </div>
-
-            <Field
-              label="Gear level"
-              htmlFor="gear_level"
-              error={errors.gear_level}
-              hint="The number in your in-game Equipment Level window. Captains sort the board on this, so a made-up figure gets you drafted into a fight you can't hold."
-            >
-              <input
-                id="gear_level"
-                type="number"
-                inputMode="numeric"
-                className="field-input mono max-w-[170px]"
-                value={form.gear_level}
-                onChange={(e) => set('gear_level', e.target.value)}
-                disabled={locked}
-                min={0}
-                max={20000}
-                step={10}
-              />
             </Field>
 
             <Field
@@ -340,7 +338,7 @@ export default function Signup() {
             </label>
 
             <div className="flex items-center gap-3.5 flex-wrap pt-1">
-              <Button type="submit" disabled={locked || saving || !derived.ok} className="px-5 py-2 text-[13px]">
+              <Button type="submit" disabled={locked || saving || picked.length === 0} className="px-5 py-2 text-[13px]">
                 {saving ? 'Saving…' : signup && signup.status !== 'withdrawn' ? 'Save changes' : 'File signup'}
               </Button>
               {signup && signup.status !== 'withdrawn' && !locked && (
@@ -376,8 +374,8 @@ export default function Signup() {
                 <Tile label="On the board" value={pool.counts.approved ?? 0} note="approved and draftable" />
               </div>
               <div className="px-3.5 pb-4">
-                <div className="eyebrow mb-2">Most-signed weapons</div>
-                <WeaponBars weapons={pool.weapons || []} />
+                <div className="eyebrow mb-2">Most-mained classes</div>
+                <ClassBars classes={pool.classes || []} />
               </div>
             </Panel>
           )}
@@ -454,19 +452,31 @@ function Steps({ signup }) {
   );
 }
 
-function WeaponBars({ weapons }) {
-  const top = weapons.filter((w) => w.count > 0).slice(0, 5);
+// Sorted by how many people MAIN each class, not by how many list it anywhere.
+// A class five people keep as a third option isn't a class five people play,
+// and someone deciding what to bring needs the first number, not the second.
+function ClassBars({ classes }) {
+  const top = classes
+    .filter((c) => c.mains > 0)
+    .sort((a, b) => b.mains - a.mains || a.class_name.localeCompare(b.class_name))
+    .slice(0, 6);
   if (top.length === 0) return <p className="text-xs text-ash">Nobody is on the board yet.</p>;
-  const max = top[0].count;
+  const max = top[0].mains;
   return (
     <div>
-      {top.map((w) => (
-        <div key={w.weapon} className="flex items-center gap-2.5 mb-1.5 text-[13px]">
-          <span className="w-[82px] flex-none text-ash">{w.weapon}</span>
+      {top.map((c) => (
+        <div key={c.class_name} className="flex items-center gap-2.5 mb-1.5 text-[13px]">
+          <span className="w-[96px] flex-none text-ash truncate" title={c.class_name}>{c.class_name}</span>
           <span className="flex-1 h-[7px] rounded bg-panelup overflow-hidden">
-            <i className="block h-full bg-brass/75" style={{ width: `${(w.count / max) * 100}%` }} />
+            <i className="block h-full bg-brass/75" style={{ width: `${(c.mains / max) * 100}%` }} />
           </span>
-          <span className="mono text-[11.5px] text-ash w-6 text-right">{w.count}</span>
+          <span
+            className="mono text-[11.5px] text-ash w-10 text-right"
+            title={`${c.mains} main it, ${c.count} list it at all`}
+          >
+            {c.mains}
+            {c.count > c.mains && <span className="text-ash/60">+{c.count - c.mains}</span>}
+          </span>
         </div>
       ))}
     </div>

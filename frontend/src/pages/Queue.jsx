@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { errorMessage } from '../api';
+import { weaponsLabel } from '@shared/classes.cjs';
 import { Panel, Pill, Button, Empty, Note } from '../components/ui';
 
 const TABS = [
@@ -43,7 +44,9 @@ export default function Queue() {
       .filter((r) => !needle
         || r.player_name.toLowerCase().includes(needle)
         || (r.discord_username || '').toLowerCase().includes(needle)
-        || r.class_name.toLowerCase().includes(needle));
+        // Any of their classes matches, not just their main — "who can play
+        // Templar" is a question you ask of the whole list.
+        || (r.classes || []).some((c) => c.toLowerCase().includes(needle)));
   }, [rows, tab, q]);
 
   async function decide(row, decision) {
@@ -186,11 +189,11 @@ export default function Queue() {
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
-                {['Character', 'Discord', 'Class', 'Weapons', 'Gear', 'Nights', 'Filed', ''].map((h, i) => (
+                {['Character', 'Discord', 'Main', 'Also plays', 'Nights', 'Filed', ''].map((h, i) => (
                   <th
                     key={h + i}
-                    className={`text-left px-3.5 py-2.5 whitespace-nowrap text-[10px] uppercase tracking-[0.1em]
-                      font-semibold text-ash border-b border-line bg-panelup/50 ${h === 'Gear' ? 'text-right' : ''}`}
+                    className="text-left px-3.5 py-2.5 whitespace-nowrap text-[10px] uppercase tracking-[0.1em]
+                      font-semibold text-ash border-b border-line bg-panelup/50"
                   >
                     {h}
                   </th>
@@ -200,7 +203,7 @@ export default function Queue() {
             <tbody>
               {shown.length === 0 && (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={7}>
                     <Empty>
                       {q ? 'Nothing matches that search.'
                         : tab === 'pending' ? 'Nothing waiting. Every signup is decided.'
@@ -221,12 +224,17 @@ export default function Queue() {
                   <td className="px-3.5 py-2.5 border-b border-line/50 text-ash whitespace-nowrap">
                     {r.discord_username || '—'}
                   </td>
-                  <td className="px-3.5 py-2.5 border-b border-line/50 whitespace-nowrap">{r.class_name}</td>
-                  <td className="px-3.5 py-2.5 border-b border-line/50 text-ash text-xs whitespace-nowrap">
-                    {r.weapon_1} · {r.weapon_2}
+                  {/* Main and backups kept in separate columns. Run together
+                      they'd read as three equal picks, and the first one is
+                      the only one a captain drafts on. */}
+                  <td className="px-3.5 py-2.5 border-b border-line/50 whitespace-nowrap">
+                    {(r.classes || [])[0] || <span className="text-ash">—</span>}
+                    {(r.classes || [])[0] && (
+                      <span className="block text-[11px] text-ash">{weaponsLabel(r.classes[0])}</span>
+                    )}
                   </td>
-                  <td className="px-3.5 py-2.5 border-b border-line/50 mono text-right whitespace-nowrap">
-                    {r.gear_level.toLocaleString()}
+                  <td className="px-3.5 py-2.5 border-b border-line/50 text-ash text-xs whitespace-nowrap">
+                    {(r.classes || []).slice(1).join(', ') || '—'}
                   </td>
                   <td className="px-3.5 py-2.5 border-b border-line/50 text-ash text-xs whitespace-nowrap">
                     {(r.nights || []).join(' ') || '—'}
