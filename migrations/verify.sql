@@ -212,4 +212,57 @@ union all
 select '009 · wants_shotcall has NO default',
        (select column_default is null from information_schema.columns
          where table_schema = 'public' and table_name = 'player_signups'
-           and column_name = 'wants_shotcall');
+           and column_name = 'wants_shotcall')
+union all
+-- ── 010 ────────────────────────────────────────────────────────────────────
+select '010 · drafts table',
+       to_regclass('public.drafts') is not null
+union all
+select '010 · draft_picks table',
+       to_regclass('public.draft_picks') is not null
+union all
+-- THE one that makes a live draft safe. Without it, two captains clicking at
+-- the same instant both get a pick #14 and the draft silently skips a turn.
+select '010 · a pick number can only be claimed once',
+       exists (select 1 from pg_constraint where conname = 'draft_picks_number_unique')
+union all
+select '010 · a player can only be drafted once',
+       exists (select 1 from pg_constraint where conname = 'draft_picks_player_once')
+union all
+select '010 · picks are pinned to their team''s tournament',
+       exists (select 1 from pg_constraint where conname = 'draft_picks_team_tournament')
+union all
+select '010 · draft status is constrained',
+       exists (select 1 from pg_constraint where conname = 'drafts_status_valid')
+union all
+-- Below 15s the clock expires while the page is still loading and every pick
+-- becomes an auto-pick.
+select '010 · the pick clock has a floor and a ceiling',
+       exists (select 1 from pg_constraint where conname = 'drafts_pick_seconds_range')
+union all
+select '010 · the running tournament has a draft row',
+       exists (select 1 from drafts d
+               join tournaments t on t.id = d.tournament_id
+              where t.status <> 'complete')
+union all
+-- Undo restores the board entries a pick deleted, and this column is the only
+-- place their tier and rank still exist once the pick is made.
+select '010 · picks remember the board entries they cleared',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'draft_picks'
+                 and column_name = 'cleared_entries' and data_type = 'jsonb')
+union all
+-- Every pick must have put somebody on a roster. A pick with no roster row is a
+-- turn the draft stepped over, and nothing else in the app would report it.
+select '010 · every pick has a matching roster row',
+       not exists (
+         select 1 from draft_picks p
+          where not exists (
+            select 1 from team_players tp
+             where tp.team_id = p.team_id and tp.signup_id = p.signup_id))
+union all
+-- The pick numbers must be 1..n with no holes. A gap means an undo went half
+-- way, and the draft would hand the clock to the wrong team for the rest of the
+-- night.
+select '010 · pick numbers have no gaps',
+       (select coalesce(max(pick_number), 0) = count(*) from draft_picks);

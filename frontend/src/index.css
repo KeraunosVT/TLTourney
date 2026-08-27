@@ -109,6 +109,18 @@ body {
   }
 }
 
+/* The stream view's new-pick entrance. Deliberately short and slight: on a
+   broadcast, a card that swings around is a distraction from the name on it —
+   the animation only exists so a viewer who looked away knows something
+   changed. Respects prefers-reduced-motion via the block at the bottom. */
+@keyframes pickFlash {
+  0%   { border-color: rgb(var(--color-crimsonbright)); transform: translateY(0.5vh); opacity: 0.75; }
+  100% { border-color: rgb(var(--color-line));          transform: translateY(0);     opacity: 1; }
+}
+.pick-flash {
+  animation: pickFlash 520ms ease-out;
+}
+
 /* Digits that line up in a column should actually line up. */
 .mono {
   font-family: 'JetBrains Mono', ui-monospace, monospace;

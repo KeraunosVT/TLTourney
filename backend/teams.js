@@ -37,6 +37,26 @@ function conflictMessage(error) {
   return null;
 }
 
+/**
+ * Is a draft under way, and therefore is the shape of the teams frozen?
+ *
+ * Read straight from the table rather than through backend/draft.js: draft.js
+ * imports addToRoster from here, and importing it back would make the two
+ * modules load each other. Three lines of query is cheaper than the cycle.
+ *
+ * 'paused' counts as under way. A paused draft is one that is going to resume,
+ * with a frozen order snapshot that already names every team — deleting one of
+ * them while it is paused is exactly as broken as doing it while it is live.
+ */
+async function draftUnderWay(tournamentId) {
+  const { data } = await supabase
+    .from('drafts').select('status').eq('tournament_id', tournamentId).maybeSingle();
+  return data?.status === 'live' || data?.status === 'paused';
+}
+
+const DRAFT_FROZEN = 'The draft has started — teams and captains are frozen. '
+  + 'Pause and reset the draft first if this really has to change.';
+
 // Every captain seat in the tournament, keyed by team.
 async function captainsByTeam(tournamentId) {
   const { data, error } = await supabase
@@ -110,8 +130,10 @@ async function rosteredIds(tournamentId) {
  * is not information, it is a line to scroll past on the one night nobody has
  * time to scroll — and the pool it came from is hundreds long.
  *
- * Returns { error } on failure, or { clearedFrom } — the teams whose boards
- * lost an entry, so a caller can say whose plans just changed.
+ * Returns { error } on failure, or { cleared, clearedFrom } — the board rows
+ * that were deleted, and just the team ids from them. The full rows matter for
+ * the draft: undoing a pick has to be able to put those entries back, and once
+ * they are deleted there is nowhere else the tier and rank still exist.
  */
 async function addToRoster(tournamentId, teamId, signupId, via, extra = {}) {
   const { error } = await supabase.from('team_players').insert({
@@ -127,13 +149,14 @@ async function addToRoster(tournamentId, teamId, signupId, via, extra = {}) {
   const { data, error: clearErr } = await supabase
     .from('draft_board_entries').delete()
     .eq('tournament_id', tournamentId).eq('signup_id', signupId)
-    .select('team_id');
+    .select('team_id, tier, rank, note');
 
   if (clearErr) {
     console.warn(`roster add left board entries behind (signup ${signupId}): ${clearErr.message}`);
-    return { clearedFrom: [] };
+    return { cleared: [], clearedFrom: [] };
   }
-  return { clearedFrom: (data || []).map((r) => r.team_id) };
+  const cleared = data || [];
+  return { cleared, clearedFrom: cleared.map((r) => r.team_id) };
 }
 
 /**
@@ -350,6 +373,10 @@ organizerRouter.post('/', async (req, res) => {
   const t = await currentTournament();
   if (!t) return res.status(409).json({ error: 'No tournament is running.' });
 
+  // A team created now is not in the frozen order snapshot, so it would never
+  // get a pick — it would sit on the page looking like it was in the draft.
+  if (await draftUnderWay(t.id)) return res.status(409).json({ error: DRAFT_FROZEN });
+
   const name = String(req.body?.name ?? '').trim();
   if (!name) return res.status(400).json({ error: 'The team needs a name.' });
   if (name.length > 40) return res.status(400).json({ error: 'Team names are 40 characters or fewer.' });
@@ -439,6 +466,11 @@ organizerRouter.post('/:id/captains', async (req, res) => {
   const t = await currentTournament();
   if (!t) return res.status(409).json({ error: 'No tournament is running.' });
 
+  // A captain is a roster row, and the draft's round count was worked out from
+  // how many roster rows each team had when it started. Seating one now would
+  // give that team 61 players and everybody else 60.
+  if (await draftUnderWay(t.id)) return res.status(409).json({ error: DRAFT_FROZEN });
+
   const { data: team } = await supabase
     .from('teams').select('id, name').eq('id', req.params.id).eq('tournament_id', t.id).maybeSingle();
   if (!team) return res.status(404).json({ error: 'Team not found.' });
@@ -527,6 +559,8 @@ organizerRouter.delete('/:id/captains/:signupId', async (req, res) => {
   const t = await currentTournament();
   if (!t) return res.status(409).json({ error: 'No tournament is running.' });
 
+  if (await draftUnderWay(t.id)) return res.status(409).json({ error: DRAFT_FROZEN });
+
   const { data: row } = await supabase
     .from('team_captains').select('id, seat, signup:player_signups (player_name)')
     .eq('tournament_id', t.id).eq('team_id', req.params.id).eq('signup_id', req.params.signupId)
@@ -564,6 +598,11 @@ organizerRouter.delete('/:id', async (req, res) => {
   const t = await currentTournament();
   if (!t) return res.status(409).json({ error: 'No tournament is running.' });
 
+  // Deleting a team mid-draft takes its picks with it (the cascade) and leaves
+  // its id sitting in the frozen order snapshot, so every remaining round hands
+  // the clock to a team that no longer exists.
+  if (await draftUnderWay(t.id)) return res.status(409).json({ error: DRAFT_FROZEN });
+
   const { data: team } = await supabase
     .from('teams').select('id, name').eq('id', req.params.id).eq('tournament_id', t.id).maybeSingle();
   if (!team) return res.status(404).json({ error: 'Team not found.' });
@@ -589,6 +628,11 @@ organizerRouter.post('/reseed', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
   const t = await currentTournament();
   if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  // The draft's order is snapshotted, so a reseed would NOT change whose turn
+  // it is — which is worse than if it did. Every seed on screen would disagree
+  // with the order the draft is actually running, and nothing would say so.
+  if (await draftUnderWay(t.id)) return res.status(409).json({ error: DRAFT_FROZEN });
 
   const order = Array.isArray(req.body?.order) ? req.body.order : null;
   if (!order || order.length === 0) return res.status(400).json({ error: 'Send the team ids in their new order.' });
@@ -621,6 +665,6 @@ organizerRouter.post('/reseed', async (req, res) => {
 });
 
 module.exports = {
-  publicRouter, organizerRouter, readiness,
-  captainCandidates, captaincyFor, rostersByTeam, rosteredIds, addToRoster,
+  publicRouter, organizerRouter, readiness, conflictMessage,
+  captainCandidates, captaincyFor, captainsByTeam, rostersByTeam, rosteredIds, addToRoster,
 };

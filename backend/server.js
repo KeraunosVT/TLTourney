@@ -17,6 +17,7 @@ const signups = require('./signups');
 const organizerRouter = require('./organizer');
 const teams = require('./teams');
 const board = require('./board');
+const draft = require('./draft');
 const { currentTournament, supabase } = require('./db');
 
 const app = express();
@@ -79,6 +80,28 @@ app.get('/api/tournament', async (req, res) => {
 
 app.use('/api/auth', authRouter);
 
+// ── The stream view ─────────────────────────────────────────────────────────
+// Deliberately ABOVE requireAuth, and the only data route that is.
+//
+// This is what a broadcast points at: an OBS browser source carries no session
+// cookie, and neither does anybody who follows the link from the stream. Read
+// only, and it returns nothing that isn't already being shown on the broadcast
+// — teams, rosters, picks, the clock. Boards, the pool list and Discord ids are
+// all on the authenticated route instead.
+//
+// Rate-limited by IP rather than by user, because there is no user. Generous:
+// the page polls every two seconds and a watch party is many browsers behind
+// one address.
+const streamLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(req.ip),
+  message: { error: 'Too many requests — slow down.' },
+});
+app.use('/api/stream/draft', streamLimiter, draft.publicRouter);
+
 // ── Everything below needs a session ────────────────────────────────────────
 app.use('/api', requireAuth);
 
@@ -115,7 +138,14 @@ const boardLimiter = rateLimit({
 });
 
 app.use('/api/board', (req, res, next) => (req.method === 'GET' ? next() : boardLimiter(req, res, next)), board.router);
+
+// The draft page polls every couple of seconds while it is open, so its GET is
+// exempt for the same reason the board's is. The pick itself is a write, but a
+// write nobody makes twice a minute — it shares the board's allowance.
+app.use('/api/draft', (req, res, next) => (req.method === 'GET' ? next() : boardLimiter(req, res, next)), draft.router);
+
 app.use('/api/organizer/teams', requireOrganizer, teams.organizerRouter);
+app.use('/api/organizer/draft', requireOrganizer, draft.organizerRouter);
 app.use('/api/organizer', requireOrganizer, organizerRouter);
 
 // ── Static frontend ─────────────────────────────────────────────────────────

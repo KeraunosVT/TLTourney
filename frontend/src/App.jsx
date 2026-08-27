@@ -9,6 +9,8 @@ import Signup from './pages/Signup';
 import Queue from './pages/Queue';
 import Teams from './pages/Teams';
 import Board from './pages/Board';
+import Draft from './pages/Draft';
+import Watch from './pages/Watch';
 
 function Shell() {
   const { user, logout } = useAuth();
@@ -40,6 +42,11 @@ function Shell() {
         </div>
         <div className="flex md:flex-col gap-1 flex-1 md:flex-none">
           <NavLink to="/signup" className={link}>Sign up</NavLink>
+          {/* Shown to everyone, unlike the board. The draft is the event — a
+              player who isn't a captain still wants to watch their name come
+              off the list, and the page refuses the pick button rather than the
+              page. */}
+          <NavLink to="/draft" className={link}>Draft</NavLink>
           {/* Only a captain has one, so only a captain is offered one. The
               server refuses it either way — this just keeps a dead link off
               everyone else's rail. */}
@@ -111,9 +118,17 @@ export default function App() {
       <CaptaincyProvider>
         <BrowserRouter>
           <Routes>
+            {/* OUTSIDE the gate, deliberately and uniquely. This is the scene a
+                broadcast points at: an OBS browser source has no session, and
+                sending it to a login page would put a login page on the stream.
+                It reads the one unauthenticated API route, which returns only
+                what is being broadcast anyway. */}
+            <Route path="/watch" element={<Watch />} />
+
             <Route element={<Gate />}>
               <Route index element={<Navigate to="/signup" replace />} />
               <Route path="/signup" element={<Signup />} />
+              <Route path="/draft" element={<Draft />} />
               <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />
               <Route path="/queue" element={<OrganizerOnly><Queue /></OrganizerOnly>} />
               <Route path="/teams" element={<OrganizerOnly><Teams /></OrganizerOnly>} />
