@@ -135,6 +135,17 @@ export default function Signup() {
 
   const allPositions = form.positions.length === POSITIONS.length;
 
+  // What to say after a save, given whether a confirmation DM went out.
+  function savedMessage({ created, dm }) {
+    if (!created && !dm) return 'Saved.';
+    const filed = created ? 'Signup filed' : 'Signup re-filed';
+    if (dm?.ok) return `${filed} — confirmation sent to your Discord DMs, and you'll get another when an organizer reviews it.`;
+    if (dm?.reason === 'DMs closed') {
+      return `${filed}. We couldn't DM you — your Discord DMs are closed to this server, so check back here for your status.`;
+    }
+    return `${filed} — an organizer will review it.`;
+  }
+
   async function save(e) {
     e?.preventDefault();
     setSaving(true);
@@ -148,12 +159,11 @@ export default function Signup() {
         classes: picked,
       });
       setSignup(data.signup);
-      setBanner({
-        tone: 'good',
-        text: data.created
-          ? "Signup filed — an organizer will review it and you'll get a DM."
-          : 'Saved.',
-      });
+      // Only promise a DM that actually sent. `dm` is null when this was an
+      // edit rather than a new filing, ok:false when Discord refused — most
+      // often because their DMs are closed, which is worth saying plainly
+      // rather than leaving them waiting for a message that will never come.
+      setBanner({ tone: 'good', text: savedMessage(data) });
       const poolRes = await api.get('/api/signup/pool');
       setPool(poolRes.data);
     } catch (err) {

@@ -13,7 +13,7 @@ const cookieParser = require('cookie-parser');
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 
 const { router: authRouter, requireAuth, requireOrganizer, authConfigured } = require('./auth');
-const signupsRouter = require('./signups');
+const signups = require('./signups');
 const organizerRouter = require('./organizer');
 const teams = require('./teams');
 const board = require('./board');
@@ -82,7 +82,7 @@ app.use('/api/auth', authRouter);
 // ── Everything below needs a session ────────────────────────────────────────
 app.use('/api', requireAuth);
 
-// Writing a signup is cheap but not free, and the form autosaves. Cap it per
+// Writing a signup is cheap but not free. Cap it per
 // user rather than per IP: a guild sharing one office connection is a normal
 // thing, and keying on IP would have them throttling each other.
 const writeLimiter = rateLimit({
@@ -96,7 +96,7 @@ const writeLimiter = rateLimit({
   message: { error: "You're saving very fast — give it a moment." },
 });
 
-app.use('/api/signup', (req, res, next) => (req.method === 'GET' ? next() : writeLimiter(req, res, next)), signupsRouter);
+app.use('/api/signup', (req, res, next) => (req.method === 'GET' ? next() : writeLimiter(req, res, next)), signups.router);
 app.use('/api/teams', teams.publicRouter);
 
 // The board gets its own, much larger allowance rather than sharing the signup

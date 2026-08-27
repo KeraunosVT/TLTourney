@@ -6,10 +6,56 @@
 const express = require('express');
 const { supabase, currentTournament, audit } = require('./db');
 const { validateSignup, NIGHTS } = require('./validateSignup');
+const { sendDM } = require('./discord');
 const { WEAPONS, WEAPONS_FOR, CLASS_NAMES } = require('../shared/classes.cjs');
 const { ROLES, POSITIONS } = require('../shared/roles.cjs');
 
 const router = express.Router();
+
+// Only rendered into the DM when it's a real link. APP_URL is `/` in local
+// development, and "you can edit it at /" is worse than saying nothing.
+const APP_URL = process.env.APP_URL || '';
+const SITE_LINK = /^https?:\/\//i.test(APP_URL) ? APP_URL.replace(/\/+$/, '') : null;
+
+/**
+ * The confirmation DM — a receipt, quoting back what was actually stored.
+ *
+ * Deliberately quotes the SAVED row rather than what was submitted. The
+ * validator reorders positions and nights into canonical order and drops
+ * duplicates, so this is the one message that shows the player what the
+ * tournament will actually see. If it doesn't match what they think they
+ * entered, that is the discrepancy worth surfacing, not hiding.
+ */
+function receipt(t, s) {
+  const lines = [
+    `📋 Signup received for **${t.name}**.`,
+    '',
+    `**${s.player_name}** — ${s.role || 'no role given'}`,
+    `Classes: ${(s.classes || []).join(' · ') || 'none given'}`,
+  ];
+  if ((s.positions || []).length) lines.push(`Positions: ${s.positions.join(', ')}`);
+  if ((s.nights || []).length) lines.push(`Nights: ${s.nights.join(', ')}`);
+  if (s.wants_captain) lines.push('You put your name down to captain.');
+
+  lines.push('');
+  lines.push(
+    "An organizer checks it over before you're on the draft board — you'll get another DM either way."
+  );
+  if (SITE_LINK) lines.push(`Change anything while signups are open: ${SITE_LINK}`);
+
+  return lines.join('\n');
+}
+
+/**
+ * Should filing this signup send a confirmation DM?
+ *
+ * True only when the row ENTERS the review queue. Pulled out as its own
+ * function because the condition is the whole feature: get it wrong one way and
+ * a player is DM'd every time they touch their entry, get it wrong the other
+ * and somebody who withdrew and came back is never told their signup landed.
+ */
+const entersQueue = (previousStatus, nextStatus) =>
+  nextStatus === 'pending' && previousStatus !== 'pending';
 
 // Fields the player is allowed to see about their own signup. `decision_note`
 // is included on purpose: being told why you were turned down is the difference
@@ -220,7 +266,24 @@ router.put('/mine', async (req, res) => {
     positions: value.positions,
   });
 
-  res.json({ signup: data, created: !existing });
+  // ── The confirmation DM ───────────────────────────────────────────────────
+  // Sent when the signup ENTERS the queue, not on every save. This route is
+  // the same one a later edit goes through, so DMing unconditionally would send
+  // an identical confirmation to somebody who came back to fix a typo — and a
+  // confirmation that arrives four times is one nobody reads the fifth time.
+  //
+  // A withdrawn or rejected signup coming back does count: it is a fresh
+  // submission going through the queue again, and the player should be told it
+  // landed. Editing a signup that is already pending or approved does not.
+  //
+  // Never fails the signup. sendDM doesn't throw, and a closed DM inbox must
+  // not be the reason a signup doesn't save — the row is already written by
+  // this point, and it is the row that counts.
+  const dm = entersQueue(existing?.status, nextStatus)
+    ? await sendDM(req.user.id, receipt(t, data))
+    : null;
+
+  res.json({ signup: data, created: !existing, dm });
 });
 
 // ── Withdraw ────────────────────────────────────────────────────────────────
@@ -258,11 +321,6 @@ router.get('/options', (req, res) => {
   res.json({
     // Each class with the weapon pair it is, so a caller can label a pick
     // without shipping the whole lookup table to do it.
-    // Role spread: the number an organizer checks before closing signups,
-    // because a pool of sixty with four healers in it cannot field ten teams
-    // however many people are in it.
-    roles: ROLES.map((role) => ({ role, count: roleCount[role] || 0 })),
-    positions: POSITIONS.map((position) => ({ position, count: positionCount[position] || 0 })),
     classes: CLASS_NAMES.map((name) => ({ name, weapons: WEAPONS_FOR[name] || [] })),
     weapons: WEAPONS,
     roles: ROLES,
@@ -272,4 +330,4 @@ router.get('/options', (req, res) => {
   });
 });
 
-module.exports = router;
+module.exports = { router, receipt, entersQueue };
