@@ -14,16 +14,43 @@
 //   · four things visible at once and no more: who is picking, how long they
 //     have, who was just taken, and who is next. Anything else is for the
 //     people IN the draft, and they have their own page.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { Sigil } from '../components/Brand';
 import { useCountdown, mmss } from '../lib/clock';
 
 export default function Watch() {
   const [state, setState] = useState(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState(null);
   const inFlight = useRef(false);
   const everLoaded = useRef(false);
+
+  // ── The commentary desk ───────────────────────────────────────────────────
+  // Closed by default, which is what keeps it off the broadcast: an OBS browser
+  // source never hovers and never presses a key, so it renders the clean scene
+  // and nothing else. A commentator opens /watch?desk=1 on their own monitor,
+  // or presses A on any copy of the page when a segment calls for showing it.
+  const [desk, setDesk] = useState(() =>
+    new URLSearchParams(window.location.search).get('desk') === '1');
+
+  // Read by `load` through a ref rather than a dependency, so opening the desk
+  // doesn't give `load` a new identity and re-arm the poll interval.
+  const wantPool = useRef(desk);
+  useEffect(() => { wantPool.current = desk; }, [desk]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      // Not while they're typing a name into the search box.
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName)) {
+        if (e.key === 'Escape') e.target.blur();
+        return;
+      }
+      if (e.key === 'a' || e.key === 'A') setDesk((v) => !v);
+      if (e.key === 'Escape') setDesk(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // No dependencies on purpose. If this closed over `state` it would get a new
   // identity on every poll, and the interval below would be torn down and
@@ -34,21 +61,30 @@ export default function Watch() {
     try {
       // Plain axios, not the shared instance: this route takes no credentials
       // and there is no session to send.
-      const { data } = await axios.get('/api/stream/draft');
+      const { data } = await axios.get(`/api/stream/draft${wantPool.current ? '?pool=1' : ''}`);
       setState(data);
       everLoaded.current = true;
-      setFailed(false);
-    } catch {
+      setFailed(null);
+    } catch (err) {
       // A dropped poll is not worth showing on a broadcast — the last good
       // frame stays up and the next poll fixes it. Only a page that has NEVER
-      // loaded says anything.
-      if (!everLoaded.current) setFailed(true);
+      // loaded says anything, and then it says what the server said: the
+      // failure that will really happen is 010 not having been run, and
+      // "waiting for the draft" would hide that behind a spinner forever.
+      if (!everLoaded.current) {
+        setFailed(err?.response?.data?.error || 'Waiting for the draft…');
+      }
     } finally {
       inFlight.current = false;
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Opening the desk asks for the pool immediately rather than at the next
+  // poll. Two seconds of an empty panel is two seconds a commentator spends
+  // wondering whether it's broken.
+  useEffect(() => { if (desk) load(); }, [desk, load]);
 
   const status = state?.draft?.status;
   useEffect(() => {
@@ -64,8 +100,8 @@ export default function Watch() {
       <Stage>
         <div className="m-auto text-center">
           <Sigil size={72} />
-          <div className="mt-4 text-[2vh] text-ash">
-            {failed ? 'Waiting for the draft…' : 'Loading…'}
+          <div className="mt-4 text-[2vh] text-ash max-w-[46ch] leading-relaxed">
+            {failed || 'Loading…'}
           </div>
         </div>
       </Stage>
@@ -134,7 +170,145 @@ export default function Watch() {
           ))}
         </div>
       </section>
+
+      {desk && (
+        <Desk
+          pool={state.pool}
+          count={state.poolCount}
+          scarcity={state.scarcity}
+          onClose={() => setDesk(false)}
+        />
+      )}
+
+      {/* Revealed by a mouse, and only by a mouse. OBS has no cursor, so this
+          never appears in the capture — it exists so a commentator who wasn't
+          told about the keyboard shortcut can still find the panel. */}
+      {!desk && (
+        <button
+          onClick={() => setDesk(true)}
+          className="fixed bottom-[1.5vh] right-[1.5vw] px-[0.8vw] py-[0.6vh] rounded border border-line
+                     bg-panel text-ash text-[1.2vh] opacity-0 hover:opacity-100 focus:opacity-100
+                     transition-opacity"
+        >
+          Available players (A)
+        </button>
+      )}
     </Stage>
+  );
+}
+
+// ── The commentary desk ─────────────────────────────────────────────────────
+// The question a commentator asks forty times a night is "is X still on the
+// board?", and the one that makes the segment is "how many tanks are left".
+// Both are here; nothing else is.
+//
+// It overlays the right-hand side rather than replacing the scene, so the clock
+// and the team on it stay visible while somebody is reading down the list.
+function Desk({ pool, count, scarcity, onClose }) {
+  const [q, setQ] = useState('');
+  const [role, setRole] = useState('');
+  const box = useRef(null);
+
+  useEffect(() => { box.current?.focus(); }, []);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return (pool || []).filter((p) => (
+      (!role || p.role === role)
+      && (!needle
+        || p.player_name.toLowerCase().includes(needle)
+        || (p.classes || []).some((c) => c.toLowerCase().includes(needle)))
+    ));
+  }, [pool, q, role]);
+
+  return (
+    <aside
+      className="fixed top-0 right-0 h-full w-[34vw] min-w-[360px] max-w-[560px] z-10
+                 bg-panel/97 border-l border-line flex flex-col shadow-2xl"
+    >
+      <header className="px-[1.2vw] py-[1.4vh] border-b border-line flex items-baseline justify-between gap-3 shrink-0">
+        <div>
+          <div className="text-[1.1vh] uppercase tracking-[0.24em] text-ash">Still available</div>
+          <div className="mono text-[3vh] leading-none mt-[0.5vh] tabular-nums">{count ?? '—'}</div>
+        </div>
+        <button onClick={onClose} className="text-[1.3vh] text-ash hover:text-bone">
+          close (esc)
+        </button>
+      </header>
+
+      {/* The scarcity line. "Four tanks left and the teams need eleven more" is
+          the sentence; a raw count of everyone left is not. `needed` is the
+          floor across every team — the slots no flexible slot can cover. */}
+      {scarcity?.length > 0 && (
+        <div className="px-[1.2vw] py-[1.2vh] border-b border-line grid grid-cols-3 gap-[0.8vw] shrink-0">
+          {scarcity.map((s) => {
+            const short = s.available < s.needed;
+            return (
+              <button
+                key={s.role}
+                onClick={() => setRole(role === s.role ? '' : s.role)}
+                className={`text-left px-[0.6vw] py-[0.8vh] rounded border transition-colors ${
+                  role === s.role ? 'border-crimson bg-crimson/12' : 'border-line hover:border-crimson/50'
+                }`}
+              >
+                <div className="text-[1.05vh] uppercase tracking-[0.16em] text-ash">{s.role}</div>
+                <div className={`mono text-[2.4vh] leading-none mt-[0.4vh] tabular-nums ${
+                  short ? 'text-crimsonbright' : ''
+                }`}>
+                  {s.available}
+                </div>
+                <div className="text-[1.05vh] text-ash mt-[0.4vh] tabular-nums">
+                  {s.needed} still needed
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="px-[1.2vw] py-[1.1vh] border-b border-line shrink-0">
+        <input
+          ref={box}
+          className="field-input py-[0.6vh] text-[1.6vh]"
+          placeholder="Search a name or a class…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {!pool ? (
+          <div className="px-[1.2vw] py-[2vh] text-[1.4vh] text-ash">Loading the pool…</div>
+        ) : filtered.length === 0 ? (
+          <div className="px-[1.2vw] py-[2vh] text-[1.4vh] text-ash">
+            {(pool.length === 0) ? 'Everybody has been drafted.' : 'Nobody matches that.'}
+          </div>
+        ) : (
+          <>
+            {(q || role) && (
+              <div className="px-[1.2vw] pt-[1vh] text-[1.15vh] text-ash tabular-nums">
+                {filtered.length} of {pool.length}
+              </div>
+            )}
+            {/* Two columns: a hundred and fifty names in one column is a lot of
+                scrolling to answer "is he still there". */}
+            <div className="grid grid-cols-2 gap-x-[0.8vw] px-[1.2vw] py-[1vh]">
+              {filtered.map((p) => (
+                <div key={p.id} className="py-[0.55vh] border-b border-line/30 min-w-0">
+                  <div className="text-[1.45vh] truncate">
+                    {p.player_name}
+                    {p.wants_shotcall && <span className="text-verdigris ml-[0.4vw]">·SC</span>}
+                  </div>
+                  <div className="text-[1.05vh] text-ash truncate">
+                    {p.role || '—'} · {(p.classes || []).join(' ') || 'no class'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </aside>
   );
 }
 

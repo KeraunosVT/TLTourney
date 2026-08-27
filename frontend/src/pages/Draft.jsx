@@ -88,7 +88,14 @@ export default function Draft() {
     return (
       <div className="px-6 py-7 max-w-[900px] mx-auto">
         <h1 className="font-display text-[27px]">Draft</h1>
-        <p className="text-ash text-sm mt-2">No tournament is running.</p>
+        {/* The banner carries the real reason when there is one — most likely
+            "the draft tables are missing", which a bare "no tournament is
+            running" would hide. */}
+        {banner ? (
+          <div className="mt-4"><Note tone={banner.tone}>{banner.text}</Note></div>
+        ) : (
+          <p className="text-ash text-sm mt-2">No tournament is running.</p>
+        )}
       </div>
     );
   }

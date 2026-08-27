@@ -35,6 +35,7 @@ const { autoPick } = require('../shared/autopick.cjs');
 const { tierMeta } = require('../shared/board.cjs');
 const { rosterProgress } = require('../shared/roster.cjs');
 const { roleDemand } = require('../shared/parties.cjs');
+const { ROLES } = require('../shared/roles.cjs');
 
 // How late a deadline may be before the draft stops itself instead of picking.
 //
@@ -80,6 +81,25 @@ async function draftRow(tournamentId, { create = true } = {}) {
     throw new Error(`draft create failed: ${insErr.message}`);
   }
   return made;
+}
+
+/**
+ * Turn a read failure into something actionable.
+ *
+ * The one that will actually happen is 010 not having been run: every draft
+ * page then fails identically and says "could not read the draft", which sends
+ * whoever is looking at the code rather than at the SQL editor. Same shape as
+ * the hint in /api/health, and for the same reason.
+ */
+function readFailure(res, err, what) {
+  console.error(`${what} failed:`, err.message);
+  if (/schema cache|does not exist|relation/i.test(err.message)) {
+    return res.status(503).json({
+      error: 'The draft tables are missing — run migrations/010_draft.sql in the '
+        + 'Supabase SQL editor, then migrations/verify.sql.',
+    });
+  }
+  return res.status(500).json({ error: 'Could not read the draft.' });
 }
 
 const order = (d) => (Array.isArray(d.order_snapshot) ? d.order_snapshot : []);
@@ -426,6 +446,23 @@ async function assembleState(t, d) {
     : null;
   const here = slotFor(seats.length, d.current_pick);
 
+  // How many of each role every team still HAS to find, added up. Paired with
+  // how many are left in the pool this is the scarcity story a commentator
+  // wants — "four tanks left and three teams still need two each" is a thing to
+  // say; "137 available" is not.
+  //
+  // Against the per-team minimum, not the maximum: the floor is the number
+  // below which a roster genuinely cannot be fielded, and the flexible slots
+  // have no single answer. See shared/parties.cjs.
+  const perTeam = roleDemand(Array.isArray(t.party_template) ? t.party_template : [], 1);
+  const needs = {};
+  ROLES.forEach((role) => {
+    needs[role] = teams.reduce((sum, x) => {
+      const have = (x.progress.byRole.find((r) => r.role === role) || {}).have || 0;
+      return sum + Math.max(0, (perTeam[role]?.min ?? 0) - have);
+    }, 0);
+  });
+
   return {
     tournament: { name: t.name, status: t.status, rosterSize: t.roster_size },
     draft: {
@@ -449,6 +486,7 @@ async function assembleState(t, d) {
       order: seats,
     },
     teams,
+    needs,
     picks: (picksRes.data || []).filter((p) => p.player),
   };
 }
@@ -510,9 +548,26 @@ const stamped = (state) => ({
 // from the stream.
 //
 // Everything here is already public — team rosters and draft picks are the
-// thing being broadcast. What is NOT here: the pool list, boards, Discord ids.
-// A count of who is left is all the broadcast needs, and it is all it gets.
+// thing being broadcast. What is NOT here, ever: draft boards, and any Discord
+// identity at all.
+//
+// The available-player list IS here, on request, because a commentator cannot
+// call a draft without knowing who is left — and every name in it is an in-game
+// character name that gets read aloud the moment that player is picked. The
+// line drawn is bulk DISCORD identity, not character names: `casting` strips
+// discord_username, which a hundred and fifty of on an open endpoint is a
+// scrape, and which no commentator needs.
 const publicRouter = express.Router();
+
+// A pool entry as the broadcast sees one.
+const casting = (p) => ({
+  id: p.id,
+  player_name: p.player_name,
+  role: p.role,
+  classes: p.classes,
+  positions: p.positions,
+  wants_shotcall: p.wants_shotcall,
+});
 
 publicRouter.get('/', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
@@ -524,13 +579,29 @@ publicRouter.get('/', async (req, res) => {
     if (!d) return res.json({ tournament: null, draft: null, teams: [], picks: [] });
 
     const { state, pool } = await snapshot(t, d);
-    // A count, not the list. Who is still available is a hundred and fifty
-    // names — unreadable on a broadcast, and not something an unauthenticated
-    // endpoint should hand out in bulk.
-    res.json({ ...stamped(state), poolCount: pool.length });
+
+    // How many are left of each role, against how many the teams still have to
+    // find. Three numbers, so everybody gets them.
+    const scarcity = ROLES.map((role) => ({
+      role,
+      available: pool.filter((p) => p.role === role).length,
+      needed: state.needs?.[role] ?? 0,
+    }));
+
+    // The names themselves are opt-in. A hundred and fifty of them is twenty
+    // kilobytes, and this route is polled every two seconds by every browser
+    // watching — including a stream overlay that renders none of it. The
+    // commentary desk asks; the broadcast doesn't.
+    const wantsPool = req.query.pool === '1' || req.query.pool === 'true';
+
+    res.json({
+      ...stamped(state),
+      poolCount: pool.length,
+      scarcity,
+      ...(wantsPool && { pool: pool.map(casting) }),
+    });
   } catch (err) {
-    console.error('public draft read failed:', err.message);
-    res.status(500).json({ error: 'Could not read the draft.' });
+    readFailure(res, err, 'public draft read');
   }
 });
 
@@ -592,8 +663,7 @@ router.get('/', async (req, res) => {
 
     res.json({ ...stamped(state), you, board, pool, poolCount: pool.length });
   } catch (err) {
-    console.error('draft read failed:', err.message);
-    res.status(500).json({ error: 'Could not read the draft.' });
+    readFailure(res, err, 'draft read');
   }
 });
 
@@ -727,8 +797,7 @@ organizerRouter.get('/', async (req, res) => {
       },
     });
   } catch (err) {
-    console.error('organizer draft read failed:', err.message);
-    res.status(500).json({ error: 'Could not read the draft.' });
+    readFailure(res, err, 'organizer draft read');
   }
 });
 
