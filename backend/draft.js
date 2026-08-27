@@ -52,7 +52,15 @@ const STALL_GRACE_MS = 5 * 60 * 1000;
 // there resolving twenty of them is a request that times out.
 const MAX_AUTO_PER_PASS = 5;
 
-const PLAYER = 'id, player_name, discord_username, role, classes, positions, wants_shotcall';
+// What a captain needs to know about somebody they are deciding whether to
+// draft. `notes` is what the player wrote about themselves at signup — "can
+// flex healer", "only free after 9" — and it is the single most useful thing on
+// this list that nothing else conveys.
+//
+// ⚠️  This select reaches PUBLIC responses through the picks feed, so nothing
+// here goes out unredacted. `casting` and `feedPlayer` below name the fields
+// that may leave the building; anything not in them stops at a session.
+const PLAYER = 'id, player_name, discord_username, role, classes, positions, nights, notes, wants_shotcall';
 const TEAM = 'id, name, tag, seed';
 
 const ordinal = (n) => {
@@ -400,6 +408,42 @@ const shown = (m) => ({
 // — the draft page shows a count, the stream shows the newest few — so the
 // count comes from `progress`, computed over everybody, and only the recent
 // picks travel. The full rosters live on the teams page, which asks for them.
+/**
+ * A player as the pool and the picks feed show them.
+ *
+ * The allow-list that keeps two things off every unauthenticated response:
+ *
+ *   discord_username — a hundred and fifty of these on an open endpoint is a
+ *                      scrape, and no broadcast needs one.
+ *   notes            — free text somebody wrote for the organizers. People
+ *                      explain shift patterns and health in these. They are for
+ *                      captains and organizers, and they do not go on a stream.
+ *
+ * Written as a pick-list rather than a delete-list on purpose: a column added to
+ * player_signups later is excluded by default instead of being published by
+ * whoever forgot this file existed.
+ */
+const casting = (p) => ({
+  id: p.id,
+  player_name: p.player_name,
+  role: p.role,
+  classes: p.classes,
+  positions: p.positions,
+  wants_shotcall: p.wants_shotcall,
+});
+
+// A pick, for the feed both pages render. Redacted through `casting` — the feed
+// is on the public route, and it was quietly carrying discord_username until
+// this existed.
+const feedPlayer = (row) => ({
+  pick_number: row.pick_number,
+  round: row.round,
+  team_id: row.team_id,
+  auto: row.auto,
+  created_at: row.created_at,
+  player: casting(row.player),
+});
+
 const RECENT_PER_TEAM = 8;
 
 const recentPicks = (members) => [...members]
@@ -487,7 +531,7 @@ async function assembleState(t, d) {
     },
     teams,
     needs,
-    picks: (picksRes.data || []).filter((p) => p.player),
+    picks: (picksRes.data || []).filter((p) => p.player).map(feedPlayer),
   };
 }
 
@@ -558,16 +602,6 @@ const stamped = (state) => ({
 // discord_username, which a hundred and fifty of on an open endpoint is a
 // scrape, and which no commentator needs.
 const publicRouter = express.Router();
-
-// A pool entry as the broadcast sees one.
-const casting = (p) => ({
-  id: p.id,
-  player_name: p.player_name,
-  role: p.role,
-  classes: p.classes,
-  positions: p.positions,
-  wants_shotcall: p.wants_shotcall,
-});
 
 publicRouter.get('/', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
@@ -661,7 +695,22 @@ router.get('/', async (req, res) => {
         .map((e) => ({ ...e.player, ...e, signup_id: e.signup_id }));
     }
 
-    res.json({ ...stamped(state), you, board, pool, poolCount: pool.length });
+    // Signup notes and Discord handles go to the people who have a decision to
+    // make with them — captains and organizers. /draft is open to every signed-
+    // in player, and a spectator watching their own name come off the list has
+    // no business reading a hundred and fifty people's notes.
+    const privileged = !!mine || req.user?.isOrganizer;
+
+    res.json({
+      ...stamped(state),
+      you,
+      board,
+      pool: privileged ? pool : pool.map(casting),
+      poolCount: pool.length,
+      // So the page knows whether it is showing everything, rather than
+      // guessing from whether a field happens to be populated.
+      full: privileged,
+    });
   } catch (err) {
     readFailure(res, err, 'draft read');
   }

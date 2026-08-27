@@ -419,8 +419,22 @@ function Row({ p, lead, note, highlight, canPick, picking, onPick }) {
           {p.wants_shotcall && (
             <span className="text-[10px] uppercase tracking-[0.1em] text-verdigris">shotcaller</span>
           )}
+          {(p.nights || []).length > 0 && (
+            <span className="text-[10px] text-ash/70">{(p.nights || []).join(' ')}</span>
+          )}
         </div>
-        {note && <div className="text-[11.5px] text-bone/70 mt-0.5 leading-snug">{note}</div>}
+
+        {/* Two different notes can sit on one row and they mean opposite
+            things: one is what the PLAYER said about themselves, one is what
+            THIS CAPTAIN wrote about them. Unlabelled, a scouting note reads as
+            a quote and a quote reads as scouting — so both are labelled, and
+            they are different colours. */}
+        {p.notes && <Says text={p.notes} />}
+        {note && (
+          <div className="text-[11.5px] text-bone/75 mt-0.5 leading-snug">
+            <Tag>your note</Tag>{note}
+          </div>
+        )}
       </div>
 
       {canPick && (
@@ -433,6 +447,34 @@ function Row({ p, lead, note, highlight, canPick, picking, onPick }) {
         )
       )}
     </div>
+  );
+}
+
+function Tag({ children }) {
+  return (
+    <span className="text-[9px] uppercase tracking-[0.14em] text-dim mr-1.5 align-[1px]">
+      {children}
+    </span>
+  );
+}
+
+// What the player wrote about themselves at signup.
+//
+// Clamped to one line and expanded by clicking. Notes run to 500 characters and
+// most are one clause — showing them all in full turns a list of a hundred and
+// fifty into a wall, and showing none of them wastes the most useful thing on
+// the row. One line catches "can flex healer" whole and signals the rest.
+function Says({ text }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button
+      onClick={() => setOpen((v) => !v)}
+      title={open ? 'collapse' : text}
+      className="mt-0.5 text-left w-full text-[11.5px] text-ash italic leading-snug hover:text-bone"
+    >
+      <Tag>they said</Tag>
+      <span className={open ? '' : 'inline-block max-w-full align-bottom truncate'}>{text}</span>
+    </button>
   );
 }
 

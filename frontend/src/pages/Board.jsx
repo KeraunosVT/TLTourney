@@ -311,7 +311,8 @@ function YourTeam({ roster, progress }) {
 
 function PlayerLine({ p }) {
   return (
-    <div className="flex items-baseline gap-2 flex-wrap">
+    <div>
+      <div className="flex items-baseline gap-2 flex-wrap">
       {/* Drafted players are removed from every board outright, so this should
           not normally appear. It's the fallback for an entry whose deletion
           didn't land — better a name marked unavailable than one that reads as
@@ -329,10 +330,43 @@ function PlayerLine({ p }) {
       {p.wants_shotcall && (
         <span className="text-[10px] uppercase tracking-[0.1em] text-verdigris">shotcaller</span>
       )}
-      {(p.nights || []).length > 0 && (
-        <span className="text-[10px] text-ash/70">{(p.nights || []).length} nights</span>
-      )}
+        {(p.nights || []).length > 0 && (
+          <span className="text-[10px] text-ash/70">{(p.nights || []).join(' ')}</span>
+        )}
+      </div>
+
+      {/* What they wrote about themselves. The server has been sending this
+          since the board existed and the page was dropping it — which is a
+          shame, because "can flex healer if you need one" is exactly the thing
+          that decides where somebody goes on a board. */}
+      {p.notes && <Says text={p.notes} />}
     </div>
+  );
+}
+
+function Tag({ children }) {
+  return (
+    <span className="text-[9px] uppercase tracking-[0.14em] text-dim mr-1.5 align-[1px]">
+      {children}
+    </span>
+  );
+}
+
+// Clamped to one line, expanded by clicking. Notes run to 500 characters and a
+// pool is hundreds long; one line catches most of them whole and signals the
+// rest. Labelled and italic so it is never mistaken for the captain's OWN note
+// on the same row, which means the opposite thing.
+function Says({ text }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <button
+      onClick={() => setOpen((v) => !v)}
+      title={open ? 'collapse' : text}
+      className="mt-0.5 text-left w-full text-[11.5px] text-ash italic leading-snug hover:text-bone"
+    >
+      <Tag>they said</Tag>
+      <span className={open ? '' : 'inline-block max-w-full align-bottom truncate'}>{text}</span>
+    </button>
   );
 }
 
@@ -353,7 +387,7 @@ function NoteBox({ entry, onSave }) {
           entry.note ? 'text-bone/75' : 'text-ash/50 italic'
         } hover:text-crimsonbright`}
       >
-        {entry.note || 'add a note'}
+        {entry.note ? <><Tag>your note</Tag>{entry.note}</> : 'add a note'}
       </button>
     );
   }
