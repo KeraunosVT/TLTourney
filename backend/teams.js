@@ -97,6 +97,46 @@ async function rosteredIds(tournamentId) {
 }
 
 /**
+ * Put a player on a team — the ONLY way anybody joins one.
+ *
+ * Seating a captain goes through here, and so will every draft pick. That is
+ * the point of it existing: joining a roster and disappearing from the boards
+ * are one action, and a second code path that does the first without the second
+ * leaves a drafted player sitting on four captains' boards looking available.
+ * There is no way to add somebody to a team and forget, because there is only
+ * one door.
+ *
+ * Board entries are DELETED rather than flagged. A name a captain cannot pick
+ * is not information, it is a line to scroll past on the one night nobody has
+ * time to scroll — and the pool it came from is hundreds long.
+ *
+ * Returns { error } on failure, or { clearedFrom } — the teams whose boards
+ * lost an entry, so a caller can say whose plans just changed.
+ */
+async function addToRoster(tournamentId, teamId, signupId, via, extra = {}) {
+  const { error } = await supabase.from('team_players').insert({
+    tournament_id: tournamentId, team_id: teamId, signup_id: signupId, via, ...extra,
+  });
+  if (error) return { error };
+
+  // Deliberately after the insert, and deliberately not fatal. The roster row
+  // is the fact; a board is a working note about who to pick. If this delete
+  // fails the player is still correctly on the team, and the board page's
+  // `taken` flag keeps the stale entry from reading as available until the next
+  // successful write clears it.
+  const { data, error: clearErr } = await supabase
+    .from('draft_board_entries').delete()
+    .eq('tournament_id', tournamentId).eq('signup_id', signupId)
+    .select('team_id');
+
+  if (clearErr) {
+    console.warn(`roster add left board entries behind (signup ${signupId}): ${clearErr.message}`);
+    return { clearedFrom: [] };
+  }
+  return { clearedFrom: (data || []).map((r) => r.team_id) };
+}
+
+/**
  * Who an organizer may still put in a captain's seat.
  *
  * Anybody already attached to a team is out — a co-captain, and once the draft
@@ -454,9 +494,9 @@ organizerRouter.post('/:id/captains', async (req, res) => {
   // If this insert fails the seat is already written, so the captain exists
   // without a roster row: they would still be listed as captain but could be
   // drafted by somebody else. Unwound rather than left half-applied.
-  const { error: rosterErr } = await supabase.from('team_players').insert({
-    tournament_id: t.id, team_id: team.id, signup_id: signup.id, via: VIA_CAPTAIN,
-  });
+  const { error: rosterErr, clearedFrom } = await addToRoster(
+    t.id, team.id, signup.id, VIA_CAPTAIN
+  );
   if (rosterErr) {
     await supabase.from('team_captains').delete()
       .eq('team_id', team.id).eq('signup_id', signup.id);
@@ -469,8 +509,14 @@ organizerRouter.post('/:id/captains', async (req, res) => {
 
   await audit(req.user, 'team.captain.add', team.id, {
     team: team.name, seat, player: signup.player_name, discord_id: signup.discord_id,
+    cleared_from_boards: clearedFrom.length,
   });
-  res.json({ captain: { seat, label: seatLabel(seat), ...data.signup } });
+  res.json({
+    captain: { seat, label: seatLabel(seat), ...data.signup },
+    // How many captains just lost this name off their board. Worth reporting:
+    // an organizer seating somebody late is changing other people's plans.
+    clearedFrom: clearedFrom.length,
+  });
 });
 
 // Unseat somebody. Keyed by their signup id rather than the seat, because
@@ -576,5 +622,5 @@ organizerRouter.post('/reseed', async (req, res) => {
 
 module.exports = {
   publicRouter, organizerRouter, readiness,
-  captainCandidates, captaincyFor, rostersByTeam, rosteredIds,
+  captainCandidates, captaincyFor, rostersByTeam, rosteredIds, addToRoster,
 };

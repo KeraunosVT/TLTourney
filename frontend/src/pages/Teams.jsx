@@ -50,8 +50,17 @@ export default function Teams() {
     setBusy(team.id);
     setBanner(null);
     try {
-      await api.post(`/api/organizer/teams/${team.id}/captains`, { signup_id: signupId, seat });
+      const { data } = await api.post(`/api/organizer/teams/${team.id}/captains`, { signup_id: signupId, seat });
       await load();
+      // Seating somebody takes them off every board that had them ranked. Say
+      // so — those captains are about to find a name missing and it should not
+      // be a mystery.
+      if (data?.clearedFrom > 0) {
+        setBanner({
+          tone: 'good',
+          text: `Seated. They were removed from ${data.clearedFrom} draft board${data.clearedFrom === 1 ? '' : 's'} — they're no longer available to draft.`,
+        });
+      }
     } catch (err) {
       setBanner({ tone: 'bad', text: errorMessage(err) });
       // A conflict means what's on screen is stale — the seat, or the person,

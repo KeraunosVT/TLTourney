@@ -295,9 +295,10 @@ function YourTeam({ roster, progress }) {
 function PlayerLine({ p }) {
   return (
     <div className="flex items-baseline gap-2 flex-wrap">
-      {/* A ranked player who has since joined a team stays on the board, struck
-          through. Deleting the ranking would erase work; showing it greyed is
-          how a captain sees their Tier 1 emptying out. */}
+      {/* Drafted players are removed from every board outright, so this should
+          not normally appear. It's the fallback for an entry whose deletion
+          didn't land — better a name marked unavailable than one that reads as
+          free. */}
       <span className={`text-[13.5px] ${p.taken ? 'line-through text-ash/60' : ''}`}>
         {p.player_name}
       </span>

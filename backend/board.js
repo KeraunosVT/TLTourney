@@ -95,10 +95,11 @@ router.get('/', async (req, res) => {
     // Flattened: the player's fields sit alongside the entry's, because every
     // consumer wants both and nothing wants them apart.
     //
-    // `taken` is a flag rather than a filter. A player who joined a team after
-    // being ranked stays on the board, struck through — deleting a captain's
-    // ranking because somebody else took the player would quietly erase work
-    // they did, and the fact that a Tier 1 name is gone is worth seeing.
+    // `taken` should never be true in normal running: joining a roster deletes
+    // the player's board entries everywhere, in the same call — see
+    // addToRoster. It survives as the guard for the case where that delete
+    // failed, so a stale entry reads as unavailable instead of quietly
+    // offering a player who is already on somebody's team.
     entries: entries.map((e) => ({
       ...e.player, ...e, id: e.id, signup_id: e.signup_id, taken: taken.has(e.signup_id),
     })),
