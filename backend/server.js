@@ -18,6 +18,7 @@ const organizerRouter = require('./organizer');
 const teams = require('./teams');
 const board = require('./board');
 const draft = require('./draft');
+const bracket = require('./bracket');
 const { currentTournament, supabase } = require('./db');
 
 const app = express();
@@ -144,7 +145,10 @@ app.use('/api/board', (req, res, next) => (req.method === 'GET' ? next() : board
 // write nobody makes twice a minute — it shares the board's allowance.
 app.use('/api/draft', (req, res, next) => (req.method === 'GET' ? next() : boardLimiter(req, res, next)), draft.router);
 
+app.use('/api/bracket', bracket.router);
+
 app.use('/api/organizer/teams', requireOrganizer, teams.organizerRouter);
+app.use('/api/organizer/bracket', requireOrganizer, bracket.organizerRouter);
 app.use('/api/organizer/draft', requireOrganizer, draft.organizerRouter);
 app.use('/api/organizer', requireOrganizer, organizerRouter);
 

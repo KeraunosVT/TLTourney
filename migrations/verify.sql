@@ -265,4 +265,52 @@ union all
 -- way, and the draft would hand the clock to the wrong team for the rest of the
 -- night.
 select '010 · pick numbers have no gaps',
-       (select coalesce(max(pick_number), 0) = count(*) from draft_picks);
+       (select coalesce(max(pick_number), 0) = count(*) from draft_picks)
+union all
+-- ── 011 ────────────────────────────────────────────────────────────────────
+select '011 · matches table',
+       to_regclass('public.matches') is not null
+union all
+-- The key IS a match's identity within a tournament. Without this, generating
+-- twice silently doubles every round instead of failing.
+select '011 · a match key appears once per tournament',
+       exists (select 1 from pg_constraint where conname = 'matches_key_unique')
+union all
+select '011 · bracket is constrained to W/L/GF',
+       exists (select 1 from pg_constraint where conname = 'matches_bracket_valid')
+union all
+select '011 · kind is constrained to match/walkover/void',
+       exists (select 1 from pg_constraint where conname = 'matches_kind_valid')
+union all
+-- A half-applied result would otherwise leave a match reading as finished with
+-- nobody having won it — the bracket advances nothing while looking done.
+select '011 · a complete match has a winner, and only a complete one does',
+       exists (select 1 from pg_constraint where conname = 'matches_winner_iff_complete')
+union all
+select '011 · a team cannot play itself',
+       exists (select 1 from pg_constraint where conname = 'matches_two_sides')
+union all
+select '011 · slot sources are jsonb',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'matches'
+                 and column_name = 'slot_a' and data_type = 'jsonb')
+union all
+select '011 · matches updated_at trigger',
+       exists (select 1 from pg_trigger where tgname = 'matches_touch' and not tgisinternal)
+union all
+-- Double elimination arithmetic: everybody but the champion loses twice, and
+-- every real match produces exactly one loss. A bracket that does not satisfy
+-- this was drawn wrong, and it will still run to completion and crown somebody.
+select '011 · the drawn bracket has exactly 2n-2 real matches',
+       (select count(*) filter (where kind = 'match' and not is_reset)
+             = greatest(0, 2 * (select count(*) from teams
+                                 where tournament_id = m.tournament_id and seed is not null) - 2)
+          from matches m group by m.tournament_id limit 1)
+       is not false
+union all
+-- A winner who was never in the match is the shape of a bad advance.
+select '011 · every recorded winner actually played that match',
+       not exists (select 1 from matches
+                   where winner_team_id is not null
+                     and winner_team_id not in (coalesce(team_a_id, winner_team_id),
+                                                coalesce(team_b_id, winner_team_id)));

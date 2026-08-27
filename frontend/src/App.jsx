@@ -10,6 +10,7 @@ import Queue from './pages/Queue';
 import Teams from './pages/Teams';
 import Board from './pages/Board';
 import Draft from './pages/Draft';
+import Bracket from './pages/Bracket';
 import Watch from './pages/Watch';
 import Pool from './pages/Pool';
 
@@ -48,6 +49,7 @@ function Shell() {
               off the list, and the page refuses the pick button rather than the
               page. */}
           <NavLink to="/draft" className={link}>Draft</NavLink>
+          <NavLink to="/bracket" className={link}>Bracket</NavLink>
           {/* Only a captain has one, so only a captain is offered one. The
               server refuses it either way — this just keeps a dead link off
               everyone else's rail. */}
@@ -135,6 +137,7 @@ export default function App() {
               <Route index element={<Navigate to="/signup" replace />} />
               <Route path="/signup" element={<Signup />} />
               <Route path="/draft" element={<Draft />} />
+              <Route path="/bracket" element={<Bracket />} />
               <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />
               <Route path="/queue" element={<OrganizerOnly><Queue /></OrganizerOnly>} />
               <Route path="/teams" element={<OrganizerOnly><Teams /></OrganizerOnly>} />
