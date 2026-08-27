@@ -14,84 +14,38 @@
 //   · four things visible at once and no more: who is picking, how long they
 //     have, who was just taken, and who is next. Anything else is for the
 //     people IN the draft, and they have their own page.
-import { useCallback, useEffect, useRef, useState } from 'react';
-import axios from 'axios';
+import { useEffect, useState } from 'react';
 import { Sigil } from '../components/Brand';
+import PoolPanel from '../components/PoolPanel';
 import { useCountdown, mmss } from '../lib/clock';
+import { useStreamDraft } from '../lib/stream';
 
 export default function Watch() {
-  const [state, setState] = useState(null);
-  const [failed, setFailed] = useState(null);
-  const inFlight = useRef(false);
-  const everLoaded = useRef(false);
-
-  // ── The pop-out ───────────────────────────────────────────────────────────
-  // Not a panel over the scene. /pool is its own window, so a commentator can
-  // put it on a second monitor and a producer can add it to OBS as a separate
-  // browser source, sized and placed to fit the layout instead of covering a
-  // third of the rosters.
+  // ── The rail ──────────────────────────────────────────────────────────────
+  // On the scene, not in a second window. It is part of the broadcast: a viewer
+  // can see who is left without being told to go and type a URL, and a
+  // commentator can read it off the same screen the pick is on.
   //
-  // Named, so pressing A twice focuses the window that is already open rather
-  // than stacking a second one on top of it.
-  const [blocked, setBlocked] = useState(false);
+  // Still hideable, because a producer running a full-screen bracket segment
+  // wants the scene clean — A toggles it, ?pool=0 opens without it. Default ON,
+  // which is the opposite of where this started, because it now belongs here.
+  const [rail, setRail] = useState(() =>
+    new URLSearchParams(window.location.search).get('pool') !== '0');
 
-  // Read off the address bar rather than hard-coded, so the line on the
-  // broadcast says the domain people actually reached this on — and says
-  // localhost in dev rather than lying about the live one.
-  const host = window.location.host;
-
-  const popOut = useCallback(() => {
-    const w = window.open('/pool', 'tlt_pool', 'width=560,height=940,menubar=no,toolbar=no,location=no');
-    // A blocker returns null. Say so rather than looking broken — the URL is
-    // public and typeable, which is the whole reason it is short.
-    if (w) { w.focus(); setBlocked(false); } else { setBlocked(true); }
-  }, []);
+  const { state, failed } = useStreamDraft(rail);
 
   useEffect(() => {
     const onKey = (e) => {
-      // Not while they're typing somewhere.
-      if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName)) return;
-      // A keypress counts as a user gesture, so window.open is allowed here.
-      if (e.key === 'a' || e.key === 'A') popOut();
+      // Not while somebody is typing into the rail's own search box.
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName)) {
+        if (e.key === 'Escape') e.target.blur();
+        return;
+      }
+      if (e.key === 'a' || e.key === 'A') setRail((v) => !v);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [popOut]);
-
-  // No dependencies on purpose. If this closed over `state` it would get a new
-  // identity on every poll, and the interval below would be torn down and
-  // re-armed twice a second for the whole of draft night.
-  const load = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    try {
-      // Plain axios, not the shared instance: this route takes no credentials
-      // and there is no session to send.
-      const { data } = await axios.get('/api/stream/draft');
-      setState(data);
-      everLoaded.current = true;
-      setFailed(null);
-    } catch (err) {
-      // A dropped poll is not worth showing on a broadcast — the last good
-      // frame stays up and the next poll fixes it. Only a page that has NEVER
-      // loaded says anything, and then it says what the server said: the
-      // failure that will really happen is 010 not having been run, and
-      // "waiting for the draft" would hide that behind a spinner forever.
-      if (!everLoaded.current) {
-        setFailed(err?.response?.data?.error || 'Waiting for the draft…');
-      }
-    } finally {
-      inFlight.current = false;
-    }
   }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const status = state?.draft?.status;
-  useEffect(() => {
-    const id = setInterval(load, status === 'live' ? 2000 : 10000);
-    return () => clearInterval(id);
-  }, [status, load]);
 
   const d = state?.draft;
   const left = useCountdown(d?.deadline, d?.serverTime);
@@ -115,7 +69,21 @@ export default function Watch() {
   const latest = (state.picks || [])[0];
 
   return (
-    <Stage>
+    <Stage
+      rail={rail && (
+        <aside className="w-[26vw] min-w-[300px] max-w-[460px] shrink-0 border-l border-line
+                          bg-panel/60 flex flex-col min-h-0">
+          {/* The em the whole panel is sized from. A viewport unit here because
+              this is a fixed 16:9 scene; /pool passes pixels instead. */}
+          <PoolPanel
+            pool={state.pool}
+            poolCount={state.poolCount}
+            scarcity={state.scarcity}
+            style={{ fontSize: '1.75vh' }}
+          />
+        </aside>
+      )}
+    >
       {/* ── Header ─────────────────────────────────────────────────────── */}
       <header className="flex items-center gap-[2vw] px-[2.5vw] py-[1.4vh] border-b border-line/70 shrink-0">
         <Sigil size={40} />
@@ -143,35 +111,20 @@ export default function Watch() {
         <Latest pick={latest} team={latest ? byId[latest.team_id] : null} />
       </section>
 
-      {/* ── The strip: on deck, and where viewers find the full pool ──── */}
-      <div className="px-[2.5vw] pb-[1.6vh] shrink-0 flex items-center gap-[2vw]">
-        {d?.status === 'live' && d.onDeck?.length > 0 && (
-          <div className="flex items-center gap-[1.4vw] overflow-hidden min-w-0">
-            <span className="text-[1.1vh] uppercase tracking-[0.24em] text-ash shrink-0">On deck</span>
-            {d.onDeck.slice(0, 5).map((x, i) => (
-              <span key={x.pick} className="flex items-center gap-[1.4vw] shrink-0">
-                {i > 0 && <span className="text-dim text-[1.6vh]">›</span>}
-                <span className={`text-[1.9vh] whitespace-nowrap ${i === 0 ? 'text-bone' : 'text-ash'}`}>
-                  {byId[x.teamId]?.name || '—'}
-                </span>
+      {/* ── On deck ────────────────────────────────────────────────────── */}
+      {d?.status === 'live' && d.onDeck?.length > 0 && (
+        <div className="px-[2.5vw] pb-[1.6vh] shrink-0 flex items-center gap-[1.4vw] overflow-hidden">
+          <span className="text-[1.1vh] uppercase tracking-[0.24em] text-ash shrink-0">On deck</span>
+          {d.onDeck.slice(0, 5).map((x, i) => (
+            <span key={x.pick} className="flex items-center gap-[1.4vw] shrink-0">
+              {i > 0 && <span className="text-dim text-[1.6vh]">›</span>}
+              <span className={`text-[1.9vh] whitespace-nowrap ${i === 0 ? 'text-bone' : 'text-ash'}`}>
+                {byId[x.teamId]?.name || '—'}
               </span>
-            ))}
-          </div>
-        )}
-
-        {/* ON the broadcast, deliberately. A viewer cannot click anything on a
-            stream — they can only type what they can read — so the one way the
-            pool reaches them is a short URL that stays on screen. This is why
-            the route is /pool and not /watch/desk. */}
-        <div className="ml-auto shrink-0 text-right leading-tight">
-          <div className="text-[1.05vh] uppercase tracking-[0.2em] text-ash">
-            {state.poolCount ?? '—'} still available
-          </div>
-          <div className="text-[1.5vh] text-bone mt-[0.3vh] tabular-nums">
-            {host}/pool
-          </div>
+            </span>
+          ))}
         </div>
-      </div>
+      )}
 
       {/* ── The rosters, growing ───────────────────────────────────────── */}
       <section className="flex-1 min-h-0 px-[2.5vw] pb-[2vh]">
@@ -185,35 +138,30 @@ export default function Watch() {
         </div>
       </section>
 
-      {/* Revealed by a mouse, and only by a mouse. OBS has no cursor, so it
-          never appears in the capture — it exists so a commentator who was not
-          told about the keyboard shortcut can still find the window. */}
+      {/* Revealed by a mouse, and only by a mouse. OBS has no cursor, so this
+          never appears in the capture. */}
       <button
-        onClick={popOut}
-        className="fixed bottom-[1.5vh] right-[1.5vw] px-[0.8vw] py-[0.6vh] rounded border border-line
+        onClick={() => setRail((v) => !v)}
+        className="fixed bottom-[1.5vh] left-[1.5vw] px-[0.8vw] py-[0.6vh] rounded border border-line
                    bg-panel text-ash text-[1.2vh] opacity-0 hover:opacity-100 focus:opacity-100
                    transition-opacity"
       >
-        Pop out available players (A)
+        {rail ? 'Hide available players (A)' : 'Show available players (A)'}
       </button>
-
-      {blocked && (
-        <div className="fixed bottom-[1.5vh] left-[1.5vw] px-[1vw] py-[0.8vh] rounded border border-oxblood/70
-                        bg-panel text-[1.3vh] text-bone">
-          The pop-up was blocked — open <span className="text-crimsonbright">{host}/pool</span> yourself.
-        </div>
-      )}
 
     </Stage>
   );
 }
 
-// Fills the viewport exactly and never scrolls — a scrollbar on a broadcast is
-// a bug the audience can see and nobody can fix from the sofa.
-function Stage({ children }) {
+// Fills the viewport exactly. The SCENE never scrolls — a scrollbar on a
+// broadcast is a bug the audience can see and nobody can fix from the sofa. The
+// rail beside it scrolls internally, which is a different thing: it is a list
+// somebody is working through, not a layout that overflowed.
+function Stage({ children, rail }) {
   return (
-    <div className="fixed inset-0 flex flex-col overflow-hidden bg-ink text-bone">
-      {children}
+    <div className="fixed inset-0 flex overflow-hidden bg-ink text-bone">
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">{children}</div>
+      {rail}
     </div>
   );
 }

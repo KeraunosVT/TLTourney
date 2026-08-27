@@ -622,17 +622,33 @@ publicRouter.get('/', async (req, res) => {
       needed: state.needs?.[role] ?? 0,
     }));
 
-    // The names themselves are opt-in. A hundred and fifty of them is twenty
-    // kilobytes, and this route is polled every two seconds by every browser
-    // watching — including a stream overlay that renders none of it. The
-    // commentary desk asks; the broadcast doesn't.
+    // ── Sending a hundred and fifty names twice a second, but only once ────
+    //
+    // The pool changes when a pick is made, which is every couple of MINUTES.
+    // The clock changes every couple of seconds. Sending both at the clock's
+    // rate is twenty kilobytes a poll per viewer to re-deliver a list that is
+    // identical to the one already on screen.
+    //
+    // So the pool carries a version, and a caller that already holds that
+    // version says so with `have`. It gets everything else and no list, and
+    // keeps rendering the copy it has.
+    //
+    // The version is the pick number and the pool size, which between them
+    // move on every event that changes who is available: a pick, and an
+    // organizer approving or withdrawing somebody mid-draft. An organizer
+    // EDITING a player's classes mid-draft is not covered and will show stale
+    // until the next pick — a trade taken deliberately for a version that
+    // costs nothing to compute.
+    const poolVersion = `${d.current_pick}.${pool.length}`;
     const wantsPool = req.query.pool === '1' || req.query.pool === 'true';
+    const held = String(req.query.have || '');
 
     res.json({
       ...stamped(state),
       poolCount: pool.length,
+      poolVersion,
       scarcity,
-      ...(wantsPool && { pool: pool.map(casting) }),
+      ...(wantsPool && held !== poolVersion && { pool: pool.map(casting) }),
     });
   } catch (err) {
     readFailure(res, err, 'public draft read');
