@@ -620,10 +620,19 @@ organizerRouter.delete('/:id', async (req, res) => {
 // ── Reseed ──────────────────────────────────────────────────────────────────
 // Takes the full ordered list of team ids and renumbers them 1..N.
 //
-// Applied in two passes with the seeds parked in negative numbers first. The
-// partial unique index means a straight rewrite collides the moment a team
-// takes a seed another team still holds — which is every reorder that isn't a
-// pure append. Negatives can't collide with the 1..N being written after them.
+// Two passes, because a straight rewrite collides against teams_seed_unique the
+// moment a team takes a seed another team still holds — which is every reorder
+// that isn't a pure append.
+//
+// The teams are parked at NULL in between. An earlier version parked them in
+// NEGATIVE numbers, which could never work: teams.seed carries
+// `check (seed is null or seed >= 1)`, so the very first park was refused and
+// every reorder 500'd. NULL is the only value that is both legal and exempt
+// from the unique index, which is partial — `where seed is not null`.
+//
+// The window where every team is unseeded is why the draft is blocked above:
+// seed order IS draft order, and a draft reading this mid-reorder would see
+// nothing to run.
 organizerRouter.post('/reseed', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
   const t = await currentTournament();
@@ -643,20 +652,26 @@ organizerRouter.post('/reseed', async (req, res) => {
     return res.status(400).json({ error: 'That list does not match the teams that exist — reload the page.' });
   }
 
-  for (let i = 0; i < order.length; i++) {
-    const { error } = await supabase.from('teams').update({ seed: -(i + 1) })
-      .eq('id', order[i]).eq('tournament_id', t.id);
-    if (error) {
-      console.error('reseed park failed:', error.message);
-      return res.status(500).json({ error: 'Could not reorder the teams.' });
-    }
+  // Pass 1: clear every seed. One statement, so it cannot half-apply.
+  const { error: parkErr } = await supabase.from('teams')
+    .update({ seed: null }).eq('tournament_id', t.id).in('id', order);
+  if (parkErr) {
+    console.error('reseed park failed:', parkErr.message);
+    return res.status(500).json({ error: 'Could not reorder the teams.' });
   }
+
+  // Pass 2: write 1..N. These have to be one at a time — each team gets a
+  // different value — so this is the pass that can stop partway, and the
+  // message says what that leaves behind rather than a generic failure.
   for (let i = 0; i < order.length; i++) {
     const { error } = await supabase.from('teams').update({ seed: i + 1 })
       .eq('id', order[i]).eq('tournament_id', t.id);
     if (error) {
       console.error('reseed write failed:', error.message);
-      return res.status(500).json({ error: 'Teams are half-renumbered — reload and try again.' });
+      return res.status(500).json({
+        error: `Renumbering stopped at team ${i + 1} of ${order.length} — the rest are `
+          + 'unseeded. Reload and set the order again.',
+      });
     }
   }
 
