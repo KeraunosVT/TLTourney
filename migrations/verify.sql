@@ -84,9 +84,13 @@ union all
 select '004 · teams table',
        to_regclass('public.teams') is not null
 union all
-select '004 · one captain cannot hold two teams',
-       exists (select 1 from pg_indexes
-               where schemaname = 'public' and indexname = 'teams_captain_unique')
+-- 004's captain index guarded teams.captain_id, and 006 drops both. Asserted
+-- GONE rather than deleted, so a database still carrying it — 006 half-applied,
+-- or never run — reads false here instead of looking finished.
+-- The rule itself lives on as `006 · one person cannot captain two teams`.
+select '004 · captain index is GONE (superseded by 006)',
+       not exists (select 1 from pg_indexes
+                   where schemaname = 'public' and indexname = 'teams_captain_unique')
 union all
 select '004 · seeds are unique where set',
        exists (select 1 from pg_indexes
