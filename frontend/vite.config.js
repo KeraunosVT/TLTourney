@@ -37,7 +37,7 @@ export default defineConfig({
   optimizeDeps: {
     // Same file, dev server side: pre-bundle it so `import` of a CommonJS
     // module works under `vite dev` too, not only in a production build.
-    include: ['@shared/classes.cjs'],
+    include: ['@shared/classes.cjs', '@shared/roles.cjs', '@shared/captains.cjs'],
     entries: ['src/**/*.jsx'],
   },
 });

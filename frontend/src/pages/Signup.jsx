@@ -420,7 +420,8 @@ export default function Signup() {
               <span>
                 I'd like to captain a team
                 <span className="block text-xs text-ash mt-0.5">
-                  Organizers pick captains from the people who volunteer. Saying yes isn't a commitment.
+                  Every team has a captain and a co-captain, both drafting. Organizers pick them from
+                  the people who volunteer — saying yes isn't a commitment.
                 </span>
               </span>
             </label>

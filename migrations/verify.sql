@@ -112,4 +112,31 @@ union all
 -- Healer, not Support — the signup form stores Healer, and a slot the form can
 -- never satisfy is a slot that silently stays empty forever.
 select '005 · template says Healer, not Support',
-       (select party_template::text not like '%Support%' from tournaments order by created_at limit 1);
+       (select party_template::text not like '%Support%' from tournaments order by created_at limit 1)
+union all
+-- ── 006 ────────────────────────────────────────────────────────────────────
+select '006 · team_captains table',
+       to_regclass('public.team_captains') is not null
+union all
+-- The half-applied state to watch for: the table created but the old column
+-- still there. Two places to read a captain from is worse than one of either,
+-- because the app reads the new one and an organizer might edit the old.
+select '006 · teams.captain_id is GONE (captains are rows now)',
+       not exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'teams'
+                     and column_name = 'captain_id')
+union all
+select '006 · a team has at most two captain seats',
+       exists (select 1 from pg_constraint where conname = 'team_captains_seat_unique')
+union all
+select '006 · seat is constrained to 1 or 2',
+       exists (select 1 from pg_constraint where conname = 'team_captains_seat_check')
+union all
+select '006 · one person cannot captain two teams',
+       exists (select 1 from pg_indexes
+               where schemaname = 'public' and indexname = 'team_captains_one_team_per_person')
+union all
+-- Without this the denormalised tournament_id can drift from the team's, and
+-- the one-team-per-person index above starts guarding the wrong thing.
+select '006 · captain rows are pinned to their team''s tournament',
+       exists (select 1 from pg_constraint where conname = 'team_captains_team_tournament');

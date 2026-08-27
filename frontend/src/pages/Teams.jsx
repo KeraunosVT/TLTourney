@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Empty, Note, Field } from '../components/ui';
+import { CAPTAIN_SEATS } from '@shared/captains.cjs';
 
 export default function Teams() {
   const [teams, setTeams] = useState([]);
@@ -45,17 +46,30 @@ export default function Teams() {
     }
   }
 
-  async function patch(team, body) {
+  async function addCaptain(team, seat, signupId) {
     setBusy(team.id);
     setBanner(null);
     try {
-      await api.put(`/api/organizer/teams/${team.id}`, body);
+      await api.post(`/api/organizer/teams/${team.id}/captains`, { signup_id: signupId, seat });
       await load();
     } catch (err) {
       setBanner({ tone: 'bad', text: errorMessage(err) });
-      // A conflict means what's on screen is stale — seeds and captains are
-      // both unique, so the other value came from somewhere.
+      // A conflict means what's on screen is stale — the seat, or the person,
+      // went somewhere else since this page loaded.
       if (err?.response?.status === 409) load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeCaptain(team, captain) {
+    setBusy(team.id);
+    setBanner(null);
+    try {
+      await api.delete(`/api/organizer/teams/${team.id}/captains/${captain.id}`);
+      await load();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
     } finally {
       setBusy(null);
     }
@@ -94,6 +108,11 @@ export default function Teams() {
 
   if (loading) return <div className="p-8 text-sm text-ash">Loading…</div>;
 
+  // Volunteers who are still free — the list shrinks as they're seated, which
+  // is the point: what's left is who an organizer still has to place.
+  const volunteers = candidates.filter((c) => c.wants_captain);
+  const seatsFilled = teams.reduce((n, t) => n + (t.captains?.length || 0), 0);
+
   return (
     <div className="px-6 py-7 max-w-[1180px] mx-auto">
       <header className="flex items-end justify-between gap-5 flex-wrap mb-5">
@@ -101,8 +120,8 @@ export default function Teams() {
           <h1 className="font-display text-[27px]">Teams</h1>
           <p className="text-ash text-sm mt-1.5 max-w-[64ch]">
             Each team is {tournament?.party_count}&nbsp;parties of {tournament?.party_size} plus{' '}
-            {tournament?.sub_count} subs — {tournament?.roster_size} players. Seed order is draft
-            order: the snake starts at seed 1.
+            {tournament?.sub_count} subs — {tournament?.roster_size} players, run by a captain and a
+            co-captain. Seed order is draft order: the snake starts at seed 1.
           </p>
         </div>
       </header>
@@ -141,43 +160,54 @@ export default function Teams() {
                     <span className="font-display text-[17px]">{t.name}</span>
                     {t.tag && <span className="mono text-[11px] text-crimson">{t.tag}</span>}
                   </div>
-                  <div className="mt-1.5 flex items-center gap-2 flex-wrap">
-                    {t.captain ? (
-                      <>
-                        <span className="text-[13px]">
-                          <span className="text-ash">Captain</span> {t.captain.player_name}
-                        </span>
-                        <span className="text-[11px] text-ash">
-                          {t.captain.role || 'role not set'}
-                          {t.captain.classes?.[0] ? ` · ${t.captain.classes[0]}` : ''}
-                        </span>
-                        <button
-                          onClick={() => patch(t, { captain_id: null })}
-                          disabled={busy === t.id}
-                          className="text-[11px] text-ash hover:text-crimsonbright underline underline-offset-2"
-                        >
-                          remove
-                        </button>
-                      </>
-                    ) : (
-                      <select
-                        className="field-input py-1 text-[12.5px] max-w-[260px]"
-                        value=""
-                        disabled={busy === t.id || candidates.length === 0}
-                        onChange={(e) => e.target.value && patch(t, { captain_id: e.target.value })}
-                        aria-label={`Captain for ${t.name}`}
-                      >
-                        <option value="">
-                          {candidates.length ? '— assign a captain —' : '— nobody available —'}
-                        </option>
-                        {candidates.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.player_name}{c.wants_captain ? ' ★ volunteered' : ''}
-                            {c.role ? ` — ${c.role}` : ''}
-                          </option>
-                        ))}
-                      </select>
-                    )}
+                  {/* One row per seat, always both, filled or not — an empty
+                      co-captain seat is a thing to notice, and it disappears
+                      entirely if empty seats aren't drawn. */}
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {CAPTAIN_SEATS.map(({ seat, label }) => {
+                      const held = t.captains?.find((c) => c.seat === seat);
+                      return (
+                        <div key={seat} className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] uppercase tracking-[0.14em] text-ash w-[74px] flex-none">
+                            {label}
+                          </span>
+                          {held ? (
+                            <>
+                              <span className="text-[13px]">{held.player_name}</span>
+                              <span className="text-[11px] text-ash">
+                                {held.role || 'role not set'}
+                                {held.classes?.[0] ? ` · ${held.classes[0]}` : ''}
+                              </span>
+                              <button
+                                onClick={() => removeCaptain(t, held)}
+                                disabled={busy === t.id}
+                                className="text-[11px] text-ash hover:text-crimsonbright underline underline-offset-2"
+                              >
+                                remove
+                              </button>
+                            </>
+                          ) : (
+                            <select
+                              className="field-input py-1 text-[12.5px] max-w-[260px]"
+                              value=""
+                              disabled={busy === t.id || candidates.length === 0}
+                              onChange={(e) => e.target.value && addCaptain(t, seat, e.target.value)}
+                              aria-label={`${label} for ${t.name}`}
+                            >
+                              <option value="">
+                                {candidates.length ? `— assign a ${label.toLowerCase()} —` : '— nobody available —'}
+                              </option>
+                              {candidates.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.player_name}{c.wants_captain ? ' ★ volunteered' : ''}
+                                  {c.role ? ` — ${c.role}` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -218,13 +248,21 @@ export default function Teams() {
 
           <Panel
             title="Captain volunteers"
-            right={<span className="text-xs text-ash">{candidates.filter((c) => c.wants_captain).length} said yes</span>}
+            right={
+              <span className="text-xs text-ash">
+                {seatsFilled} of {teams.length * CAPTAIN_SEATS.length} seats filled
+              </span>
+            }
           >
-            {candidates.filter((c) => c.wants_captain).length === 0 ? (
-              <Empty>Nobody has volunteered to captain yet.</Empty>
+            {volunteers.length === 0 ? (
+              <Empty>
+                {seatsFilled > 0
+                  ? 'Every volunteer has a seat.'
+                  : 'Nobody has volunteered to captain yet.'}
+              </Empty>
             ) : (
               <div className="flex flex-col">
-                {candidates.filter((c) => c.wants_captain).map((c) => (
+                {volunteers.map((c) => (
                   <div key={c.id} className="px-4 py-2 border-b border-line/50 last:border-b-0 text-[13px] flex items-center gap-2 flex-wrap">
                     <span>{c.player_name}</span>
                     <span className="text-[11px] text-ash">
