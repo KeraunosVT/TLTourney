@@ -24,12 +24,32 @@ const STATUS_PILL = {
   withdrawn: ['quiet', 'Withdrawn'],
 };
 
+/**
+ * A deadline, in the reader's timezone and their locale.
+ *
+ * The timezone is named explicitly. "Closes Friday 9:00pm" is ambiguous across
+ * a tournament whose players are spread over a continent, and the ambiguity is
+ * only discovered by the person who turns up an hour late.
+ */
+function whenLocal(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'soon';
+  return d.toLocaleString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  });
+}
+
 export default function Signup() {
   const { user } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [open, setOpen] = useState(false);
+  // The signup window, as the server sees it. `canWithdraw` is separate from
+  // `open` on purpose: after the deadline you may still pull out, but you may
+  // not come back. See the two gates in backend/signups.js.
+  const [window_, setWindow] = useState({ closesAt: null, canWithdraw: false, withdrawIsFinal: false });
   const [closedReason, setClosedReason] = useState(null);
   const [signup, setSignup] = useState(null);
   const [pool, setPool] = useState(null);
@@ -88,6 +108,11 @@ export default function Signup() {
         if (!alive) return;
         setOpen(mine.data.open);
         setClosedReason(mine.data.reason);
+        setWindow({
+          closesAt: mine.data.closesAt || null,
+          canWithdraw: !!mine.data.canWithdraw,
+          withdrawIsFinal: !!mine.data.withdrawIsFinal,
+        });
         setPool(poolRes.data);
         if (mine.data.signup) {
           const s = mine.data.signup;
@@ -180,7 +205,13 @@ export default function Signup() {
   }
 
   async function withdraw() {
-    if (!window.confirm('Withdraw your signup? You can file again while signups are open.')) return;
+    // The wording changes with the window, because after the deadline this is
+    // a one-way door and a confirm that says otherwise is a lie told at the
+    // exact moment it costs the most.
+    const msg = window_.withdrawIsFinal
+      ? 'Withdraw your signup?\n\nThe deadline has passed, so you will NOT be able to file again.'
+      : 'Withdraw your signup? You can file again while signups are open.';
+    if (!window.confirm(msg)) return;
     setSaving(true);
     try {
       const { data } = await api.delete('/api/signup/mine');
@@ -217,7 +248,23 @@ export default function Signup() {
         <div className="mb-4">
           <Note tone="bad">
             {closedReason}
+            {window_.closesAt && ` Signups closed ${whenLocal(window_.closesAt)}.`}
             {signup ? ' Your entry is read-only from here.' : ''}
+            {window_.canWithdraw && signup && signup.status !== 'withdrawn'
+              ? ' You can still withdraw if you can no longer play.'
+              : ''}
+          </Note>
+        </div>
+      )}
+
+      {/* The deadline, while it still matters. Printed in the reader's own
+          timezone — the server sends the raw timestamp precisely so this can
+          be, since a deadline shown an hour out from the one somebody plans
+          around is worse than showing no deadline at all. */}
+      {!locked && window_.closesAt && (
+        <div className="mb-4">
+          <Note tone="good">
+            Signups close {whenLocal(window_.closesAt)}. You can edit anything until then.
           </Note>
         </div>
       )}
@@ -471,7 +518,7 @@ export default function Signup() {
               >
                 {saving ? 'Saving…' : signup && signup.status !== 'withdrawn' ? 'Save changes' : 'File signup'}
               </Button>
-              {signup && signup.status !== 'withdrawn' && !locked && (
+              {signup && signup.status !== 'withdrawn' && window_.canWithdraw && (
                 <Button type="button" variant="ghost" onClick={withdraw} disabled={saving}>
                   Withdraw
                 </Button>

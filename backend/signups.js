@@ -63,14 +63,45 @@ const entersQueue = (previousStatus, nextStatus) =>
 // between fixing it and resubmitting the same thing.
 const MINE = 'id, player_name, classes, role, positions, nights, notes, wants_captain, wants_shotcall, status, decision_note, created_at, updated_at';
 
-// Signups may only be created or changed while the tournament says so. Once the
-// draft opens the pool is frozen — a roster that changes underneath a running
-// draft is how a captain ends up having drafted something that no longer exists.
-const isOpen = (t) => t?.status === 'signups';
+// ── When signups are open ───────────────────────────────────────────────────
+// TWO gates, and the difference between them is deliberate.
+//
+// Signups may only be created or changed while the tournament says so AND
+// before the advertised deadline. Once the draft opens the pool is frozen — a
+// roster that changes underneath a running draft is how a captain ends up
+// having drafted something that no longer exists.
+//
+// The deadline used to be decorative: it was stored, printed on the form as a
+// date people planned around, and never checked. The damage isn't really the
+// late signup — it's the late EDIT. Captains spend an evening ranking a hundred
+// and fifty people; somebody switching from Healer to DPS the morning of the
+// draft invalidates every board that valued them as a healer, silently, and a
+// deadline is precisely the promise that this won't happen.
+const deadlinePassed = (t) => !!t?.signups_close_at
+  && Date.now() > new Date(t.signups_close_at).getTime();
+
+const isOpen = (t) => t?.status === 'signups' && !deadlinePassed(t);
+
+/**
+ * Withdrawing is NOT bound by the deadline, only by the draft starting.
+ *
+ * The deadline stops people entering and changing; it must not stop them
+ * leaving. There can be days between the close and draft night, and somebody
+ * who finds out they can't make it needs to be able to say so — the alternative
+ * is a captain spending a pick on a player who was never going to turn up,
+ * which costs the tournament far more than a tidy rule does.
+ *
+ * It is one-way after the deadline: they can pull out, but re-filing goes
+ * through isOpen and will refuse. The form says so before they confirm.
+ */
+const canWithdraw = (t) => t?.status === 'signups';
 
 function closedReason(t) {
   if (!t) return 'No tournament is running yet.';
   if (t.status === 'setup') return 'Signups have not opened yet.';
+  if (t.status === 'signups' && deadlinePassed(t)) {
+    return 'The signup deadline has passed.';
+  }
   return 'Signups are closed — the draft has started.';
 }
 
@@ -202,6 +233,14 @@ router.get('/mine', async (req, res) => {
     signup: data || null,
     open: isOpen(t),
     reason: isOpen(t) ? null : closedReason(t),
+    // Sent as the raw timestamp so the browser renders it in the reader's own
+    // timezone. Formatting it here would print the server's, and a deadline an
+    // hour out from what somebody planned around is worse than no deadline.
+    closesAt: t.signups_close_at || null,
+    // Separate from `open`, because they genuinely differ between the deadline
+    // and draft night: you may leave, but you may not come back.
+    canWithdraw: canWithdraw(t),
+    withdrawIsFinal: canWithdraw(t) && !isOpen(t),
   });
 });
 
@@ -295,7 +334,9 @@ router.delete('/mine', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
 
   const t = await currentTournament({ fresh: true });
-  if (!isOpen(t)) return res.status(409).json({ error: closedReason(t) });
+  // canWithdraw, not isOpen — see the note above the two gates. Somebody who
+  // can't make it must still be able to say so after the deadline.
+  if (!canWithdraw(t)) return res.status(409).json({ error: closedReason(t) });
 
   const { data, error } = await supabase
     .from('player_signups')
@@ -331,4 +372,4 @@ router.get('/options', (req, res) => {
   });
 });
 
-module.exports = { router, receipt, entersQueue };
+module.exports = { router, receipt, entersQueue, isOpen, canWithdraw, deadlinePassed, closedReason };
