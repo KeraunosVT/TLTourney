@@ -49,6 +49,7 @@ export default function Signup() {
     nights: [],
     notes: '',
     wants_captain: false,
+    wants_shotcall: false,
   });
 
   const set = (k, v) => {
@@ -104,6 +105,10 @@ export default function Signup() {
             nights: s.nights || [],
             notes: s.notes || '',
             wants_captain: !!s.wants_captain,
+            // Null on a signup filed before migration 009 asked. It loads as
+            // unticked and saving answers it properly — which is the only way
+            // those rows ever get a real answer.
+            wants_shotcall: !!s.wants_shotcall,
           });
         } else {
           // Nothing filed yet — a sensible starting point beats an empty box.
@@ -432,6 +437,28 @@ export default function Signup() {
                 <span className="block text-xs text-ash mt-0.5">
                   Every team has a captain and a co-captain, both drafting. Organizers pick them from
                   the people who volunteer — saying yes isn't a commitment.
+                </span>
+              </span>
+            </label>
+
+            {/* Separate from captaining on purpose. They look like the same
+                question and they aren't: a shotcaller runs the fight, a captain
+                runs the draft and the roster, and plenty of people are glad to
+                do one and not the other. Asking once would lose whichever half
+                they meant. */}
+            <label className="flex items-start gap-2.5 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 w-4 h-4 accent-[rgb(var(--color-crimson))]"
+                checked={form.wants_shotcall}
+                onChange={(e) => set('wants_shotcall', e.target.checked)}
+                disabled={locked}
+              />
+              <span>
+                I'm willing to shotcall for a team
+                <span className="block text-xs text-ash mt-0.5">
+                  Calling targets and movement in the fight itself. Separate from captaining —
+                  you can say yes to this and no to that.
                 </span>
               </span>
             </label>

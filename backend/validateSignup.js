@@ -129,6 +129,10 @@ function validateSignup(body = {}) {
       nights,
       notes,
       wants_captain: body.wants_captain === true || body.wants_captain === 'true',
+      // Always a real boolean, never null. The column is nullable only so that
+      // signups filed before the question existed can say "never asked" — a
+      // form that shows the box and comes back unticked is a genuine no.
+      wants_shotcall: body.wants_shotcall === true || body.wants_shotcall === 'true',
     },
   };
 }

@@ -204,6 +204,36 @@ test('wants_captain accepts a real boolean and the string a form sends', () => {
   assert.strictEqual(validateSignup({ ...good(), wants_captain: undefined }).value.wants_captain, false);
 });
 
+test('wants_shotcall is stored the same way, and is its own answer', () => {
+  assert.strictEqual(validateSignup({ ...good(), wants_shotcall: true }).value.wants_shotcall, true);
+  assert.strictEqual(validateSignup({ ...good(), wants_shotcall: 'true' }).value.wants_shotcall, true);
+  assert.strictEqual(validateSignup({ ...good(), wants_shotcall: 'no' }).value.wants_shotcall, false);
+});
+
+test('captaining and shotcalling are independent answers', () => {
+  // They read like the same question and are not: a shotcaller runs the fight,
+  // a captain runs the draft. Someone glad to do one and not the other must be
+  // able to say so, and a copy-paste that wires both to one field would look
+  // fine until exactly that person filled the form in.
+  const v = validateSignup({ ...good(), wants_captain: false, wants_shotcall: true }).value;
+  assert.strictEqual(v.wants_captain, false);
+  assert.strictEqual(v.wants_shotcall, true);
+
+  const w = validateSignup({ ...good(), wants_captain: true, wants_shotcall: false }).value;
+  assert.strictEqual(w.wants_captain, true);
+  assert.strictEqual(w.wants_shotcall, false);
+});
+
+test('a missing shotcall answer is stored as false, never as null', () => {
+  // The column is nullable ONLY so rows predating the question can say "never
+  // asked". Anything coming through the form has seen the box, so an absent
+  // value is a real no — writing null here would resurrect the ambiguity that
+  // migration 009 exists to contain.
+  const v = validateSignup({ ...good(), wants_shotcall: undefined }).value;
+  assert.strictEqual(v.wants_shotcall, false);
+  assert.notStrictEqual(v.wants_shotcall, null);
+});
+
 // ── Error shape ─────────────────────────────────────────────────────────────
 test('errors are keyed by field so the form can place each message', () => {
   const r = validateSignup({ player_name: '', classes: [], role: '', positions: [], nights: [] });

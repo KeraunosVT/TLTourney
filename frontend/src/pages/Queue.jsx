@@ -237,6 +237,7 @@ export default function Queue() {
                   <td className="px-3.5 py-2.5 border-b border-line/50">
                     <span className="font-medium">{r.player_name}</span>
                     {r.wants_captain && <Pill tone="crimson">wants to captain</Pill>}
+                    {r.wants_shotcall && <Pill tone="quiet">shotcaller</Pill>}
                     {r.notes && (
                       <div className="text-xs text-ash mt-1 max-w-[40ch] whitespace-normal">{r.notes}</div>
                     )}

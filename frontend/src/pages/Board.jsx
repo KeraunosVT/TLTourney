@@ -29,6 +29,7 @@ export default function Board() {
   const [q, setQ] = useState('');
   const [role, setRole] = useState('');
   const [position, setPosition] = useState('');
+  const [shotcallers, setShotcallers] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -111,11 +112,12 @@ export default function Board() {
     return pool.filter((p) => (
       (!role || p.role === role)
       && (!position || (p.positions || []).includes(position))
+      && (!shotcallers || p.wants_shotcall === true)
       && (!needle
         || p.player_name.toLowerCase().includes(needle)
         || (p.classes || []).some((c) => c.toLowerCase().includes(needle)))
     ));
-  }, [pool, q, role, position]);
+  }, [pool, q, role, position, shotcallers]);
 
   if (loading) return <div className="p-8 text-sm text-ash">Loading your board…</div>;
 
@@ -162,8 +164,23 @@ export default function Board() {
                 <option value="">Any position</option>
                 {POSITIONS.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
-              {(q || role || position) && (
-                <Button variant="ghost" onClick={() => { setQ(''); setRole(''); setPosition(''); }}>
+              {/* Explicitly `=== true`: a signup filed before the question
+                  existed has null here, and null must not pass a filter for
+                  people who said yes. */}
+              <label className="inline-flex items-center gap-1.5 text-[12.5px] text-ash cursor-pointer px-1">
+                <input
+                  type="checkbox"
+                  className="w-3.5 h-3.5 accent-[rgb(var(--color-crimson))]"
+                  checked={shotcallers}
+                  onChange={(e) => setShotcallers(e.target.checked)}
+                />
+                Shotcallers
+              </label>
+              {(q || role || position || shotcallers) && (
+                <Button
+                  variant="ghost"
+                  onClick={() => { setQ(''); setRole(''); setPosition(''); setShotcallers(false); }}
+                >
                   Clear
                 </Button>
               )}
@@ -307,6 +324,11 @@ function PlayerLine({ p }) {
       <span className="text-[11px] text-ash truncate">
         {(p.classes || []).join(' · ') || 'no class given'}
       </span>
+      {/* Worth its own mark on the board: a team needs one or two of these and
+          there is no way to tell from a class list who they are. */}
+      {p.wants_shotcall && (
+        <span className="text-[10px] uppercase tracking-[0.1em] text-verdigris">shotcaller</span>
+      )}
       {(p.nights || []).length > 0 && (
         <span className="text-[10px] text-ash/70">{(p.nights || []).length} nights</span>
       )}

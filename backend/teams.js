@@ -261,7 +261,7 @@ organizerRouter.get('/', async (req, res) => {
     supabase.from('teams').select(TEAM).eq('tournament_id', t.id)
       .order('seed', { ascending: true, nullsFirst: false }).order('name', { ascending: true }),
     supabase.from('player_signups')
-      .select('id, player_name, discord_id, discord_username, role, classes, positions, wants_captain, status')
+      .select('id, player_name, discord_id, discord_username, role, classes, positions, wants_captain, wants_shotcall, status')
       .eq('tournament_id', t.id).eq('status', 'approved'),
   ]);
 

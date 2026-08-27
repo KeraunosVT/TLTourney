@@ -10,7 +10,7 @@ const router = express.Router();
 
 // The organizer sees everything a player wrote, plus who they are on Discord.
 const FULL = 'id, discord_id, discord_username, player_name, classes, role, positions, nights, '
-  + 'notes, wants_captain, status, decision_note, decided_by, decided_at, created_at, updated_at';
+  + 'notes, wants_captain, wants_shotcall, status, decision_note, decided_by, decided_at, created_at, updated_at';
 
 // ── The whole pool ──────────────────────────────────────────────────────────
 // Not paged. A tournament pool is hundreds of rows at the outside, and paging a

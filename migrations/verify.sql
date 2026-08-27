@@ -193,4 +193,23 @@ select '008 · every seated captain is on their team''s roster',
          select 1 from team_captains tc
           where not exists (
             select 1 from team_players tp
-             where tp.team_id = tc.team_id and tp.signup_id = tc.signup_id));
+             where tp.team_id = tc.team_id and tp.signup_id = tc.signup_id))
+union all
+-- ── 009 ────────────────────────────────────────────────────────────────────
+select '009 · wants_shotcall column',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'player_signups'
+                 and column_name = 'wants_shotcall')
+union all
+-- NULLABLE is the point. `not null default false` would have written "won't
+-- shotcall" onto every signup filed before the question existed — a wrong
+-- answer that reads exactly like a given one.
+select '009 · wants_shotcall is NULLABLE (null = never asked)',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'player_signups'
+                 and column_name = 'wants_shotcall' and is_nullable = 'YES')
+union all
+select '009 · wants_shotcall has NO default',
+       (select column_default is null from information_schema.columns
+         where table_schema = 'public' and table_name = 'player_signups'
+           and column_name = 'wants_shotcall');

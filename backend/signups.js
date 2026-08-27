@@ -36,6 +36,7 @@ function receipt(t, s) {
   if ((s.positions || []).length) lines.push(`Positions: ${s.positions.join(', ')}`);
   if ((s.nights || []).length) lines.push(`Nights: ${s.nights.join(', ')}`);
   if (s.wants_captain) lines.push('You put your name down to captain.');
+  if (s.wants_shotcall) lines.push('You said you\'re willing to shotcall.');
 
   lines.push('');
   lines.push(
@@ -60,7 +61,7 @@ const entersQueue = (previousStatus, nextStatus) =>
 // Fields the player is allowed to see about their own signup. `decision_note`
 // is included on purpose: being told why you were turned down is the difference
 // between fixing it and resubmitting the same thing.
-const MINE = 'id, player_name, classes, role, positions, nights, notes, wants_captain, status, decision_note, created_at, updated_at';
+const MINE = 'id, player_name, classes, role, positions, nights, notes, wants_captain, wants_shotcall, status, decision_note, created_at, updated_at';
 
 // Signups may only be created or changed while the tournament says so. Once the
 // draft opens the pool is frozen — a roster that changes underneath a running

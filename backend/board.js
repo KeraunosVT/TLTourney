@@ -27,7 +27,7 @@ const ENTRY_WITH_PLAYER = `${ENTRY}, player:player_signups (
   id, player_name, discord_username, role, classes, positions, nights, notes
 )`;
 
-const POOL = 'id, player_name, discord_username, role, classes, positions, nights, notes, wants_captain';
+const POOL = 'id, player_name, discord_username, role, classes, positions, nights, notes, wants_captain, wants_shotcall';
 
 // ── The gate ────────────────────────────────────────────────────────────────
 // Captaincy is read fresh on every request rather than taken from the session,
