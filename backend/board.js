@@ -12,7 +12,8 @@
 // privacy promise with an admin bypass is not one.
 const express = require('express');
 const { supabase, currentTournament } = require('./db');
-const { captaincyFor } = require('./teams');
+const { captaincyFor, rostersByTeam, rosteredIds } = require('./teams');
+const { rosterProgress } = require('../shared/roster.cjs');
 const { roleDemand } = require('../shared/parties.cjs');
 const { TIERS, isTier, tierMeta, coverage, MIN_TIER, MAX_TIER } = require('../shared/board.cjs');
 
@@ -67,8 +68,24 @@ router.get('/', async (req, res) => {
     return res.status(500).json({ error: 'Could not load your board.' });
   }
 
+  // Everyone already attached to a team, anywhere. Captains are on their own
+  // team's roster, so this is what keeps them — and later, drafted players —
+  // out of the available pool.
+  let taken;
+  let rosters;
+  try {
+    [taken, rosters] = await Promise.all([
+      rosteredIds(req.tournament.id),
+      rostersByTeam(req.tournament.id),
+    ]);
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ error: 'Could not load your board.' });
+  }
+
   const entries = (entriesRes.data || []).filter((e) => e.player);
   const placed = new Set(entries.map((e) => e.signup_id));
+  const mine = rosters.get(req.team.id) || [];
 
   const template = Array.isArray(req.tournament.party_template) ? req.tournament.party_template : [];
 
@@ -77,11 +94,25 @@ router.get('/', async (req, res) => {
     tiers: TIERS,
     // Flattened: the player's fields sit alongside the entry's, because every
     // consumer wants both and nothing wants them apart.
-    entries: entries.map((e) => ({ ...e.player, ...e, id: e.id, signup_id: e.signup_id })),
-    // Everyone approved who isn't on the board yet.
-    pool: (poolRes.data || []).filter((p) => !placed.has(p.id)),
+    //
+    // `taken` is a flag rather than a filter. A player who joined a team after
+    // being ranked stays on the board, struck through — deleting a captain's
+    // ranking because somebody else took the player would quietly erase work
+    // they did, and the fact that a Tier 1 name is gone is worth seeing.
+    entries: entries.map((e) => ({
+      ...e.player, ...e, id: e.id, signup_id: e.signup_id, taken: taken.has(e.signup_id),
+    })),
+    // Approved, not on the board, and not already on somebody's roster.
+    pool: (poolRes.data || []).filter((p) => !placed.has(p.id) && !taken.has(p.id)),
+    // The captain's own team, so the board can say who they already have and
+    // how many picks are actually left.
+    roster: mine,
+    progress: rosterProgress(mine, req.tournament.roster_size),
+    // Coverage counts what is still gettable. A Tier 1 player on another team's
+    // roster is not depth this board has.
     coverage: coverage(
-      entries.map((e) => ({ tier: e.tier, role: e.player.role })),
+      entries.filter((e) => !taken.has(e.signup_id))
+        .map((e) => ({ tier: e.tier, role: e.player.role })),
       roleDemand(template, 1)
     ),
   });
@@ -108,6 +139,21 @@ router.put('/entry', async (req, res) => {
   if (!signup) return res.status(400).json({ error: 'That player is not in this tournament.' });
   if (signup.status !== 'approved') {
     return res.status(400).json({ error: `${signup.player_name} is not an approved signup.` });
+  }
+
+  // Already on a team — a captain, or later a drafted player. They can't be
+  // ranked because they can't be picked. Checked here as well as filtered out
+  // of the pool, because a page loaded before they were seated still offers
+  // them and would otherwise put a name on the board that no draft can honour.
+  try {
+    if ((await rosteredIds(req.tournament.id)).has(signup.id)) {
+      return res.status(409).json({
+        error: `${signup.player_name} is already on a team — reload to refresh the pool.`,
+      });
+    }
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ error: 'Could not check that player.' });
   }
 
   // Land at the bottom of the destination tier. Appending never disturbs an

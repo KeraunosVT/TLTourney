@@ -17,6 +17,8 @@ export default function Board() {
   const [tiers, setTiers] = useState([]);
   const [entries, setEntries] = useState([]);
   const [pool, setPool] = useState([]);
+  const [roster, setRoster] = useState([]);
+  const [progress, setProgress] = useState(null);
   const [cover, setCover] = useState(null);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState(null);
@@ -34,6 +36,8 @@ export default function Board() {
       setTiers(data.tiers || []);
       setEntries(data.entries || []);
       setPool(data.pool || []);
+      setRoster(data.roster || []);
+      setProgress(data.progress || null);
       setCover(data.coverage || null);
     } catch (err) {
       setBanner({ tone: 'bad', text: errorMessage(err, 'Could not load your board.') });
@@ -131,6 +135,8 @@ export default function Board() {
       </header>
 
       {banner && <div className="mb-4"><Note tone={banner.tone}>{banner.text}</Note></div>}
+
+      {roster.length > 0 && <YourTeam roster={roster} progress={progress} />}
 
       {cover && <Coverage c={cover} />}
 
@@ -255,10 +261,47 @@ export default function Board() {
   );
 }
 
+// Who you already have, and how many picks that leaves. The second number is
+// the one captains get wrong: two captains means 58 picks, not 60, so a board
+// built to exactly 60 is two players too long.
+function YourTeam({ roster, progress }) {
+  return (
+    <Panel
+      title="Your roster"
+      right={
+        <span className="text-xs text-ash">
+          {progress?.remaining ?? '—'} of {progress?.size ?? '—'} still to draft
+        </span>
+      }
+    >
+      <div className="p-4 flex gap-1.5 flex-wrap">
+        {roster.map((m) => (
+          <span
+            key={m.id}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded border border-line
+                       bg-panelup text-[12px]"
+            title={`${m.role || 'role not set'}${m.classes?.[0] ? ` · ${m.classes[0]}` : ''}`}
+          >
+            {m.via === 'captain' && <span className="text-crimson text-[9px]">★</span>}
+            {m.player_name}
+            <span className="text-[10px] text-ash">{m.role || '—'}</span>
+          </span>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 function PlayerLine({ p }) {
   return (
     <div className="flex items-baseline gap-2 flex-wrap">
-      <span className="text-[13.5px]">{p.player_name}</span>
+      {/* A ranked player who has since joined a team stays on the board, struck
+          through. Deleting the ranking would erase work; showing it greyed is
+          how a captain sees their Tier 1 emptying out. */}
+      <span className={`text-[13.5px] ${p.taken ? 'line-through text-ash/60' : ''}`}>
+        {p.player_name}
+      </span>
+      {p.taken && <span className="text-[10px] uppercase tracking-[0.1em] text-oxblood">taken</span>}
       {p.role && <span className="text-[10px] uppercase tracking-[0.1em] text-crimson">{p.role}</span>}
       <span className="text-[11px] text-ash truncate">
         {(p.classes || []).join(' · ') || 'no class given'}

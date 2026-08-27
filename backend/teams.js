@@ -7,6 +7,7 @@ const { supabase, currentTournament, audit } = require('./db');
 const { roleDemand, startersPerTeam } = require('../shared/parties.cjs');
 const { ROLES } = require('../shared/roles.cjs');
 const { MAX_CAPTAINS_PER_TEAM, isSeat, seatLabel, firstFreeSeat } = require('../shared/captains.cjs');
+const { VIA_CAPTAIN, rosterProgress } = require('../shared/roster.cjs');
 
 const TEAM = 'id, name, tag, seed, created_at, updated_at';
 
@@ -31,6 +32,8 @@ function conflictMessage(error) {
   if (/team_captains_one_team_per_person/.test(detail)) return 'That player is already captaining another team.';
   if (/team_captains_once_per_team/.test(detail)) return 'They already hold the other seat on this team.';
   if (/team_captains_seat_unique/.test(detail)) return 'Somebody already holds that seat — remove them first.';
+  if (/team_players_one_team_per_person/.test(detail)) return 'That player is already on another team.';
+  if (/team_players_once_per_team/.test(detail)) return 'They are already on this roster.';
   return null;
 }
 
@@ -52,21 +55,67 @@ async function captainsByTeam(tournamentId) {
 const withCaptains = (teams, byTeam) =>
   teams.map((t) => ({ ...t, captains: byTeam.get(t.id) || [] }));
 
+// Everybody on a roster in this tournament, keyed by team.
+const ROSTER_ROWS = `team_id, via, draft_round, draft_pick, player:player_signups (
+  id, player_name, discord_id, discord_username, role, classes, positions
+)`;
+
+async function rostersByTeam(tournamentId) {
+  const { data, error } = await supabase
+    .from('team_players').select(ROSTER_ROWS).eq('tournament_id', tournamentId);
+  if (error) throw new Error(`rosters read failed: ${error.message}`);
+
+  const byTeam = new Map();
+  (data || []).filter((r) => r.player).forEach((row) => {
+    if (!byTeam.has(row.team_id)) byTeam.set(row.team_id, []);
+    byTeam.get(row.team_id).push({
+      via: row.via,
+      draft_round: row.draft_round,
+      draft_pick: row.draft_pick,
+      ...row.player,
+    });
+  });
+
+  // Captains first, then drafted in pick order, then everyone else by name —
+  // the order a roster is actually read in.
+  byTeam.forEach((list) => list.sort((a, b) => (
+    (a.via === VIA_CAPTAIN ? 0 : 1) - (b.via === VIA_CAPTAIN ? 0 : 1)
+    || (a.draft_pick ?? 1e9) - (b.draft_pick ?? 1e9)
+    || a.player_name.localeCompare(b.player_name)
+  )));
+  return byTeam;
+}
+
+// Every signup already attached to a team, anywhere in the tournament. This is
+// the set that must not appear as an available player — to any captain, not
+// just their own.
+async function rosteredIds(tournamentId) {
+  const { data, error } = await supabase
+    .from('team_players').select('signup_id').eq('tournament_id', tournamentId);
+  if (error) throw new Error(`roster ids read failed: ${error.message}`);
+  return new Set((data || []).map((r) => r.signup_id));
+}
+
 /**
  * Who an organizer may still put in a captain's seat.
  *
- * Anybody already holding a seat is out — including a co-captain, which is the
- * bit worth being careful about: filtering on seat 1 alone would keep offering
- * a team's co-captain to every other team, and the database would then refuse
- * the assignment with a constraint error at the end of the click.
+ * Anybody already attached to a team is out — a co-captain, and once the draft
+ * runs, a drafted player. Filtering on seat 1 alone would keep offering a
+ * team's co-captain to every other team, and the database would then refuse the
+ * assignment with a constraint error at the end of the click.
+ *
+ * Takes the rostered set rather than the captain list, because "already on a
+ * team" is the real question and captaincy is only one way to be on one.
  *
  * Volunteers first because they said yes, but everyone approved is offered,
  * since an organizer sometimes has to go and ask someone who didn't.
  *
  * Pure, and exported for the test.
  */
-function captainCandidates(approved, captainRows) {
-  const taken = new Set(captainRows.map((c) => c.id).filter(Boolean));
+function captainCandidates(approved, rostered) {
+  const taken = rostered instanceof Set
+    ? rostered
+    : new Set((rostered || []).map((c) => c.id).filter(Boolean));
   return approved
     .filter((s) => !taken.has(s.id))
     .sort((a, b) => (b.wants_captain === true) - (a.wants_captain === true)
@@ -133,7 +182,14 @@ publicRouter.get('/', async (req, res) => {
   }
 
   try {
-    res.json({ teams: withCaptains(data || [], await captainsByTeam(t.id)) });
+    const [byTeam, rosters] = await Promise.all([captainsByTeam(t.id), rostersByTeam(t.id)]);
+    res.json({
+      teams: withCaptains(data || [], byTeam).map((x) => ({
+        ...x,
+        roster: rosters.get(x.id) || [],
+        progress: rosterProgress(rosters.get(x.id) || [], t.roster_size),
+      })),
+    });
   } catch (err) {
     console.error(err.message);
     res.status(500).json({ error: 'Could not read the teams.' });
@@ -175,21 +231,27 @@ organizerRouter.get('/', async (req, res) => {
   }
 
   let byTeam;
+  let rosters;
   try {
-    byTeam = await captainsByTeam(t.id);
+    [byTeam, rosters] = await Promise.all([captainsByTeam(t.id), rostersByTeam(t.id)]);
   } catch (err) {
     console.error(err.message);
     return res.status(500).json({ error: 'Could not load the teams page.' });
   }
 
-  const teams = withCaptains(teamsRes.data || [], byTeam);
   const approved = signupsRes.data || [];
-  const seated = teams.flatMap((x) => x.captains);
+  const teams = withCaptains(teamsRes.data || [], byTeam).map((x) => {
+    const members = rosters.get(x.id) || [];
+    return { ...x, roster: members, progress: rosterProgress(members, t.roster_size) };
+  });
+
+  // Anyone already on a team is not available to captain another one.
+  const taken = new Set(teams.flatMap((x) => x.roster).map((m) => m.id));
 
   res.json({
     tournament: t,
     teams,
-    candidates: captainCandidates(approved, seated),
+    candidates: captainCandidates(approved, taken),
     maxCaptains: MAX_CAPTAINS_PER_TEAM,
     readiness: readiness(t, teams.length, approved),
   });
@@ -384,6 +446,27 @@ organizerRouter.post('/:id/captains', async (req, res) => {
     return res.status(500).json({ error: 'Could not make them a captain.' });
   }
 
+  // A captain plays for the team they captain. This is what takes them out of
+  // the pool every captain is drafting from — including their own board — and
+  // it is written here rather than derived at read time so that "is this player
+  // taken" is one question against one table.
+  //
+  // If this insert fails the seat is already written, so the captain exists
+  // without a roster row: they would still be listed as captain but could be
+  // drafted by somebody else. Unwound rather than left half-applied.
+  const { error: rosterErr } = await supabase.from('team_players').insert({
+    tournament_id: t.id, team_id: team.id, signup_id: signup.id, via: VIA_CAPTAIN,
+  });
+  if (rosterErr) {
+    await supabase.from('team_captains').delete()
+      .eq('team_id', team.id).eq('signup_id', signup.id);
+    console.error('captain roster insert failed:', rosterErr.message);
+    const msg = conflictMessage(rosterErr);
+    return res.status(msg ? 409 : 500).json({
+      error: msg || 'Could not add them to the roster, so the captain seat was not saved.',
+    });
+  }
+
   await audit(req.user, 'team.captain.add', team.id, {
     team: team.name, seat, player: signup.player_name, discord_id: signup.discord_id,
   });
@@ -408,6 +491,19 @@ organizerRouter.delete('/:id/captains/:signupId', async (req, res) => {
   if (error) {
     console.error('captain remove failed:', error.message);
     return res.status(500).json({ error: 'Could not remove that captain.' });
+  }
+
+  // They were on the roster BECAUSE they captain, so unseating takes the roster
+  // row with it and puts them back in the available pool. Scoped to via =
+  // 'captain' on purpose: if the draft has already placed somebody, that row is
+  // a pick and removing a captain's seat must not quietly undo it.
+  const { error: rosterErr } = await supabase.from('team_players').delete()
+    .eq('team_id', req.params.id).eq('signup_id', req.params.signupId).eq('via', VIA_CAPTAIN);
+  if (rosterErr) {
+    console.error('captain roster remove failed:', rosterErr.message);
+    return res.status(500).json({
+      error: 'Seat removed, but they are still on the roster — reload and check.',
+    });
   }
 
   await audit(req.user, 'team.captain.remove', req.params.id, {
@@ -480,5 +576,5 @@ organizerRouter.post('/reseed', async (req, res) => {
 
 module.exports = {
   publicRouter, organizerRouter, readiness,
-  captainCandidates, captaincyFor,
+  captainCandidates, captaincyFor, rostersByTeam, rosteredIds,
 };

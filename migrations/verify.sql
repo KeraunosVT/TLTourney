@@ -168,4 +168,29 @@ union all
 select '007 · rank is NOT unique (reorders rewrite it)',
        not exists (select 1 from pg_indexes
                    where schemaname = 'public'
-                     and indexname like '%draft_board%rank%unique%');
+                     and indexname like '%draft_board%rank%unique%')
+union all
+-- ── 008 ────────────────────────────────────────────────────────────────────
+select '008 · team_players table',
+       to_regclass('public.team_players') is not null
+union all
+-- The one that makes "not available to draft" true rather than merely filtered
+-- in the UI. Without it two teams can hold the same player.
+select '008 · one person plays for one team',
+       exists (select 1 from pg_indexes
+               where schemaname = 'public' and indexname = 'team_players_one_team_per_person')
+union all
+select '008 · via is constrained to captain/draft/manual',
+       exists (select 1 from pg_constraint where conname = 'team_players_via_valid')
+union all
+select '008 · roster rows are pinned to their team''s tournament',
+       exists (select 1 from pg_constraint where conname = 'team_players_team_tournament')
+union all
+-- A seated captain who is not on their own roster would still be offered to
+-- every other captain as an available player. This is that check.
+select '008 · every seated captain is on their team''s roster',
+       not exists (
+         select 1 from team_captains tc
+          where not exists (
+            select 1 from team_players tp
+             where tp.team_id = tc.team_id and tp.signup_id = tc.signup_id));

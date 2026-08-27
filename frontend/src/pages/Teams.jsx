@@ -209,6 +209,8 @@ export default function Teams() {
                       );
                     })}
                   </div>
+
+                  <Roster team={t} />
                 </div>
 
                 <Button variant="ghost" onClick={() => remove(t)} disabled={busy === t.id}>Delete</Button>
@@ -274,6 +276,42 @@ export default function Teams() {
             )}
           </Panel>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Who plays for this team. Captains are on it from the moment they're seated —
+// they're not spectators, they're two of the sixty — which is also why they
+// stop appearing in every other captain's available players.
+function Roster({ team }) {
+  const members = team.roster || [];
+  const p = team.progress;
+  if (members.length === 0) return null;
+
+  return (
+    <div className="mt-2.5 pt-2.5 border-t border-line/40">
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className="text-[10px] uppercase tracking-[0.14em] text-ash">Roster</span>
+        <span className="mono text-[12px]">
+          {p?.filled ?? members.length}<span className="text-ash">/{p?.size ?? '—'}</span>
+        </span>
+        {p?.remaining > 0 && (
+          <span className="text-[11px] text-ash">{p.remaining} still to draft</span>
+        )}
+      </div>
+      <div className="mt-1.5 flex gap-1.5 flex-wrap">
+        {members.map((m) => (
+          <span
+            key={m.id}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-line
+                       bg-panelup text-[11.5px]"
+            title={`${m.role || 'role not set'}${m.classes?.[0] ? ` · ${m.classes[0]}` : ''}`}
+          >
+            {m.via === 'captain' && <span className="text-crimson text-[9px]">★</span>}
+            {m.player_name}
+          </span>
+        ))}
       </div>
     </div>
   );
