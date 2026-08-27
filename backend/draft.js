@@ -246,11 +246,110 @@ function armTimer(t, d) {
   timers.set(t.id, { handle, at: d.pick_deadline });
 }
 
-/** Read the draft, run the clock forward, re-arm the timer. */
+// ── Crash recovery ──────────────────────────────────────────────────────────
+/**
+ * Where the clock SHOULD be, given the picks actually on record.
+ *
+ * The invariant: `drafts.current_pick` is always one past the highest pick
+ * number written. Pure, and exported for the test — returns the corrected value
+ * or null when nothing is wrong.
+ *
+ * It can be wrong in both directions, and both are crashes:
+ *
+ *   current_pick <= max   A pick was written and the clock never advanced past
+ *                         it. Nobody can ever make that pick again — the unique
+ *                         index refuses it — so the draft is wedged on a turn
+ *                         that has already been taken.
+ *
+ *   current_pick >  max+1 An undo deleted a pick and died before rolling the
+ *                         clock back. The next pick is written with a number
+ *                         that leaves a hole, and every later round hands the
+ *                         clock to the wrong team.
+ */
+function reconcilePick(currentPick, maxPickNumber) {
+  const should = (maxPickNumber || 0) + 1;
+  return should === currentPick ? null : should;
+}
+
+// Reconciled once per tournament per process, because the state it repairs can
+// only be created by a process dying mid-pick — so the moment worth checking is
+// the moment a process starts. Steady-state polling pays nothing.
+const reconciled = new Set();
+
+/**
+ * Finish whatever a crash left half-done.
+ *
+ * A pick is three writes — claim the number, put them on the roster, advance
+ * the clock — and Supabase's REST interface gives no transaction across them.
+ * Rather than pretend otherwise, the order is chosen so that every interrupted
+ * state is DETECTABLE from the rows, and this repairs each one:
+ *
+ *   · a pick with no roster row  → put them on the roster (and clear the boards)
+ *   · a pick the clock never passed → advance it
+ *
+ * Safe to run at any time: with nothing to repair it does two reads and stops.
+ */
+async function reconcile(t, d, { force = false } = {}) {
+  if (!force && reconciled.has(t.id)) return d;
+  reconciled.add(t.id);
+
+  const { data: last, error } = await supabase
+    .from('draft_picks').select('pick_number, team_id, signup_id, round')
+    .eq('tournament_id', t.id)
+    .order('pick_number', { ascending: false }).limit(1).maybeSingle();
+  if (error) {
+    console.warn('draft reconcile could not read the picks:', error.message);
+    return d;
+  }
+
+  const max = last?.pick_number || 0;
+
+  // The roster row for the newest pick. Written after the pick and before the
+  // advance, so it is the half most likely to be missing.
+  if (last) {
+    const { data: onRoster } = await supabase
+      .from('team_players').select('id')
+      .eq('tournament_id', t.id).eq('signup_id', last.signup_id).maybeSingle();
+
+    if (!onRoster) {
+      console.warn(`draft reconcile: pick ${max} had no roster row — writing it`);
+      const { error: addErr } = await addToRoster(t.id, last.team_id, last.signup_id, 'draft', {
+        draft_round: last.round, draft_pick: last.pick_number,
+      });
+      if (addErr) console.error('draft reconcile roster write failed:', addErr.message);
+    }
+  }
+
+  const should = reconcilePick(d.current_pick, max);
+  if (should === null) return d;
+
+  console.warn(`draft reconcile: current_pick was ${d.current_pick}, picks reach ${max} — setting it to ${should}`);
+
+  const done = should > total(d);
+  const { data, error: upErr } = await supabase.from('drafts').update({
+    current_pick: should,
+    ...(done
+      ? { status: 'complete', pick_deadline: null, completed_at: new Date().toISOString() }
+      // A fresh clock rather than the old deadline. Whatever interrupted the
+      // draft cost the team on the clock some of their time and there is no way
+      // to know how much of it they were looking at their board for.
+      : (d.status === 'live' ? { pick_deadline: deadlineFrom(d.pick_seconds) } : {})),
+  }).eq('tournament_id', t.id).select('*').single();
+
+  if (upErr) {
+    console.error('draft reconcile failed:', upErr.message);
+    return d;
+  }
+  invalidate(t.id);
+  return data;
+}
+
+/** Read the draft, repair anything a crash left, run the clock, re-arm. */
 async function liveDraft(t) {
   const row = await draftRow(t.id);
   if (!row) return null;
-  const d = await runClock(t, row);
+  const repaired = await reconcile(t, row);
+  const d = await runClock(t, repaired);
   armTimer(t, d);
   return d;
 }
@@ -313,6 +412,20 @@ async function makePick(t, d, { teamId, signupId, auto = false, madeBy = null, r
   if (insErr) {
     const detail = `${insErr.message || ''} ${insErr.details || ''}`;
     if (/draft_picks_number_unique/.test(detail)) {
+      // Two readings, and they need different answers. Usually this is the
+      // other captain beating them by milliseconds, which is fine and the board
+      // has genuinely moved on. But it is ALSO exactly what a draft wedged by a
+      // crash looks like: the pick number was claimed and the clock never got
+      // past it, so every attempt from here lands on the same taken number
+      // forever. Repair, then say which it was.
+      const fixed = await reconcile(t, d, { force: true });
+      if (fixed && fixed.current_pick !== d.current_pick) {
+        return {
+          error: 'That pick had already been recorded but the clock never moved past it — '
+            + 'probably a restart mid-pick. It has been repaired; the draft is on the next pick now.',
+          code: 409,
+        };
+      }
       return { error: 'That pick was just made — the board has already moved on.', code: 409 };
     }
     if (/draft_picks_player_once/.test(detail)) {
@@ -1137,4 +1250,4 @@ organizerRouter.post('/reset', async (req, res) => {
   res.json({ ok: true, draft: data, removed: count || 0 });
 });
 
-module.exports = { publicRouter, router, organizerRouter, startProblems };
+module.exports = { publicRouter, router, organizerRouter, startProblems, reconcilePick, reconcile };

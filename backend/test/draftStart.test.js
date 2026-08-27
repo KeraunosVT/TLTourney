@@ -83,3 +83,46 @@ test('several problems at once are all reported, not just the first', () => {
   const { problems } = startProblems(60, teams);
   assert.strictEqual(problems.length, 3);
 });
+
+// ── Crash recovery ──────────────────────────────────────────────────────────
+// A pick is three writes with no transaction across them: claim the number, put
+// the player on the roster, advance the clock. Supabase's REST interface gives
+// no way to make that atomic, so the order is chosen instead so that every
+// interrupted state is DETECTABLE from the rows — and this is the check that
+// detects it.
+//
+// The failure it prevents is total: a pick number claimed with the clock still
+// on it can never be made again (the unique index refuses it), so the draft
+// wedges on a turn that has already been taken, forever, mid-broadcast.
+const { reconcilePick } = require('../draft');
+
+test('a clock that matches the picks on record needs no repair', () => {
+  assert.strictEqual(reconcilePick(1, 0), null, 'a draft with no picks sits on pick 1');
+  assert.strictEqual(reconcilePick(2, 1), null);
+  assert.strictEqual(reconcilePick(58, 57), null);
+});
+
+test('A CLOCK LEFT ON A PICK THAT WAS ALREADY WRITTEN IS MOVED PAST IT', () => {
+  // The crash between "claim the number" and "advance". Without this the draft
+  // is stuck: every attempt at that pick hits the unique index and is reported
+  // as "someone beat you to it", which is true and useless.
+  assert.strictEqual(reconcilePick(1, 1), 2);
+  assert.strictEqual(reconcilePick(14, 14), 15);
+  assert.strictEqual(reconcilePick(14, 16), 17, 'more than one pick behind still lands right');
+});
+
+test('a clock left AHEAD of the picks is rolled back', () => {
+  // The other crash: an undo deleted a pick and died before rolling the clock
+  // back. Left alone, the next pick is written with a number that leaves a hole,
+  // and from there every round hands the clock to the wrong team.
+  assert.strictEqual(reconcilePick(9, 3), 4);
+  assert.strictEqual(reconcilePick(2, 0), 1);
+});
+
+test('the repair is idempotent — running it twice changes nothing', () => {
+  // It runs on every process start, and a repair that drifted on each boot
+  // would be worse than the fault.
+  const once = reconcilePick(1, 1);
+  assert.strictEqual(once, 2);
+  assert.strictEqual(reconcilePick(once, 1), null);
+});
