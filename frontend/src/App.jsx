@@ -11,6 +11,7 @@ import Teams from './pages/Teams';
 import Board from './pages/Board';
 import Draft from './pages/Draft';
 import Watch from './pages/Watch';
+import Pool from './pages/Pool';
 
 function Shell() {
   const { user, logout } = useAuth();
@@ -124,6 +125,11 @@ export default function App() {
                 It reads the one unauthenticated API route, which returns only
                 what is being broadcast anyway. */}
             <Route path="/watch" element={<Watch />} />
+
+            {/* The pop-out, and the URL read off the broadcast. Public for the
+                same reason /watch is: a viewer typing it in has no session, and
+                a producer pointing a second OBS source at it has no cookie. */}
+            <Route path="/pool" element={<Pool />} />
 
             <Route element={<Gate />}>
               <Route index element={<Navigate to="/signup" replace />} />
