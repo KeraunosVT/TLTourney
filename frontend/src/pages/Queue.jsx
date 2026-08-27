@@ -132,8 +132,16 @@ export default function Queue() {
 
   const open = tournament?.status === 'signups';
 
+  // Wider than the other pages, and deliberately so: this is nine columns of
+  // dense data you work down one row at a time, and at 1180px the table was
+  // scrolling sideways on screens with room to spare. Still capped — unbounded
+  // rows on an ultrawide monitor are their own problem, because the eye loses
+  // the row somewhere between the name and the Approve button.
+  //
+  // The prose in the header keeps its own 64ch limit: that's a reading measure
+  // and has nothing to do with how much room the table wants.
   return (
-    <div className="px-6 py-7 max-w-[1180px] mx-auto">
+    <div className="px-6 py-7 max-w-[1600px] mx-auto">
       <header className="flex items-end justify-between gap-5 flex-wrap mb-5">
         <div>
           <h1 className="font-display text-[27px]">Approval queue</h1>
