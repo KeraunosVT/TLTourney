@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, NavLink, Outlet } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
+import { CaptaincyProvider, useCaptaincy } from './captaincy';
 import { useLocation } from 'react-router-dom';
 import ErrorBoundary from './components/ErrorBoundary';
 import { Sigil } from './components/Brand';
@@ -7,9 +8,11 @@ import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Queue from './pages/Queue';
 import Teams from './pages/Teams';
+import Board from './pages/Board';
 
 function Shell() {
   const { user, logout } = useAuth();
+  const { team: captainOf } = useCaptaincy();
 
   const link = ({ isActive }) =>
     `px-3 py-2 rounded text-[13.5px] border-l-2 flex items-center gap-2.5 transition-colors ${
@@ -37,6 +40,10 @@ function Shell() {
         </div>
         <div className="flex md:flex-col gap-1 flex-1 md:flex-none">
           <NavLink to="/signup" className={link}>Sign up</NavLink>
+          {/* Only a captain has one, so only a captain is offered one. The
+              server refuses it either way — this just keeps a dead link off
+              everyone else's rail. */}
+          {captainOf && <NavLink to="/board" className={link}>Draft board</NavLink>}
           {user?.isOrganizer && <NavLink to="/queue" className={link}>Approval queue</NavLink>}
           {user?.isOrganizer && <NavLink to="/teams" className={link}>Teams</NavLink>}
         </div>
@@ -45,6 +52,11 @@ function Shell() {
             {user?.username}
             {user?.isOrganizer && <span className="text-crimson"> · organizer</span>}
           </span>
+          {captainOf && (
+            <span className="whitespace-nowrap text-[11px]">
+              {captainOf.label} of <span className="text-bone">{captainOf.name}</span>
+            </span>
+          )}
           <button onClick={logout} className="hover:text-bone underline underline-offset-2">
             Sign out
           </button>
@@ -82,20 +94,34 @@ function OrganizerOnly({ children }) {
   return children;
 }
 
+// Captain-only, and unlike the organizer check this one has to WAIT. Captaincy
+// arrives a moment after the session does, and redirecting on a not-yet-loaded
+// answer would bounce a captain off their own board every time they refreshed
+// it. Organizer status has no such gap — it rides in the session itself.
+function CaptainOnly({ children }) {
+  const { team, loading } = useCaptaincy();
+  if (loading) return <div className="p-8 text-sm text-ash">Checking your team…</div>;
+  if (!team) return <Navigate to="/signup" replace />;
+  return children;
+}
+
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route element={<Gate />}>
-            <Route index element={<Navigate to="/signup" replace />} />
-            <Route path="/signup" element={<Signup />} />
-            <Route path="/queue" element={<OrganizerOnly><Queue /></OrganizerOnly>} />
-            <Route path="/teams" element={<OrganizerOnly><Teams /></OrganizerOnly>} />
-            <Route path="*" element={<Navigate to="/signup" replace />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+      <CaptaincyProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route element={<Gate />}>
+              <Route index element={<Navigate to="/signup" replace />} />
+              <Route path="/signup" element={<Signup />} />
+              <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />
+              <Route path="/queue" element={<OrganizerOnly><Queue /></OrganizerOnly>} />
+              <Route path="/teams" element={<OrganizerOnly><Teams /></OrganizerOnly>} />
+              <Route path="*" element={<Navigate to="/signup" replace />} />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </CaptaincyProvider>
     </AuthProvider>
   );
 }

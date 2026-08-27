@@ -16,6 +16,7 @@ const { router: authRouter, requireAuth, requireOrganizer, authConfigured } = re
 const signupsRouter = require('./signups');
 const organizerRouter = require('./organizer');
 const teams = require('./teams');
+const board = require('./board');
 const { currentTournament, supabase } = require('./db');
 
 const app = express();
@@ -97,6 +98,23 @@ const writeLimiter = rateLimit({
 
 app.use('/api/signup', (req, res, next) => (req.method === 'GET' ? next() : writeLimiter(req, res, next)), signupsRouter);
 app.use('/api/teams', teams.publicRouter);
+
+// The board gets its own, much larger allowance rather than sharing the signup
+// limiter. A signup is one form saved a handful of times; a board is a captain
+// working through 300 players, one small write per placement, and 30/minute
+// would throttle somebody doing exactly what the page is for. Still capped —
+// this is a write path — just capped at a rate a human sorting cards cannot
+// reach.
+const boardLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 240,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || ipKeyGenerator(req.ip),
+  message: { error: "You're saving very fast — give it a moment." },
+});
+
+app.use('/api/board', (req, res, next) => (req.method === 'GET' ? next() : boardLimiter(req, res, next)), board.router);
 app.use('/api/organizer/teams', requireOrganizer, teams.organizerRouter);
 app.use('/api/organizer', requireOrganizer, organizerRouter);
 

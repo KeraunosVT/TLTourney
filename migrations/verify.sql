@@ -143,4 +143,29 @@ union all
 -- Without this the denormalised tournament_id can drift from the team's, and
 -- the one-team-per-person index above starts guarding the wrong thing.
 select '006 · captain rows are pinned to their team''s tournament',
-       exists (select 1 from pg_constraint where conname = 'team_captains_team_tournament');
+       exists (select 1 from pg_constraint where conname = 'team_captains_team_tournament')
+union all
+-- ── 007 ────────────────────────────────────────────────────────────────────
+select '007 · draft_board_entries table',
+       to_regclass('public.draft_board_entries') is not null
+union all
+-- Without this, moving a player between tiers can leave the old row behind and
+-- the same person appears twice on one board, in two different tiers.
+select '007 · a player appears once per board',
+       exists (select 1 from pg_constraint where conname = 'draft_board_one_per_player')
+union all
+select '007 · tier is constrained to 1..6',
+       exists (select 1 from pg_constraint where conname = 'draft_board_tier_check')
+union all
+select '007 · board rows are pinned to their team''s tournament',
+       exists (select 1 from pg_constraint where conname = 'draft_board_team_tournament')
+union all
+select '007 · board updated_at trigger',
+       exists (select 1 from pg_trigger where tgname = 'draft_board_touch' and not tgisinternal)
+union all
+-- Ranks are rewritten 0..n-1 on every reorder, so a unique index here would
+-- make each reorder collide partway through. Asserted ABSENT on purpose.
+select '007 · rank is NOT unique (reorders rewrite it)',
+       not exists (select 1 from pg_indexes
+                   where schemaname = 'public'
+                     and indexname like '%draft_board%rank%unique%');
