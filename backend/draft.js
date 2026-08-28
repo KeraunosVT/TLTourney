@@ -220,6 +220,11 @@ async function chooseAuto(t, d, teamId) {
 const timers = new Map();
 
 function armTimer(t, d) {
+  // A rehearsal script drives picks at machine speed and expires clocks on
+  // purpose, so the prompt-expiry timer fires into the middle of its writes —
+  // races that a two-minute human clock does not produce. The row is still the
+  // truth either way; this only turns off the optimisation.
+  if (process.env.DRAFT_NO_TIMER) return;
   const existing = timers.get(t.id);
   if (d.status !== 'live' || !d.pick_deadline) {
     if (existing) { clearTimeout(existing.handle); timers.delete(t.id); }
@@ -271,10 +276,20 @@ function reconcilePick(currentPick, maxPickNumber) {
   return should === currentPick ? null : should;
 }
 
-// Reconciled once per tournament per process, because the state it repairs can
-// only be created by a process dying mid-pick — so the moment worth checking is
-// the moment a process starts. Steady-state polling pays nothing.
-const reconciled = new Set();
+// Checked once per VERSION of the drafts row. The mock draft found both of the
+// wrong answers here.
+//
+// Once per PROCESS is wrong because a write can fail without the process dying
+// — a transient error on the advance leaves the same wedged state — and then
+// the read path never looks again, so the draft stays stuck until a redeploy.
+//
+// Once per PICK NUMBER is wrong too, and more subtly: an undo puts the clock
+// back on a pick that has already been checked, so the check is skipped at
+// exactly the moment the state moved underneath it.
+//
+// The row's own updated_at settles it: re-check precisely when something
+// changed and never otherwise. No extra query while a captain is thinking, one
+// per pick, and one after every undo.
 
 /**
  * Finish whatever a crash left half-done.
@@ -289,12 +304,18 @@ const reconciled = new Set();
  *
  * Safe to run at any time: with nothing to repair it does two reads and stops.
  */
+const reconciled = new Map();   // tournament id -> the row version already checked
+
+// Any write to the drafts row bumps updated_at (migration 010's trigger), so
+// this identifies the exact state that was checked.
+const versionOf = (d) => `${d.current_pick}@${d.updated_at || ''}`;
+
 async function reconcile(t, d, { force = false } = {}) {
-  if (!force && reconciled.has(t.id)) return d;
-  reconciled.add(t.id);
+  if (!force && reconciled.get(t.id) === versionOf(d)) return d;
+  reconciled.set(t.id, versionOf(d));
 
   const { data: last, error } = await supabase
-    .from('draft_picks').select('pick_number, team_id, signup_id, round')
+    .from('draft_picks').select('pick_number, team_id, signup_id, round, created_at')
     .eq('tournament_id', t.id)
     .order('pick_number', { ascending: false }).limit(1).maybeSingle();
   if (error) {
@@ -302,21 +323,59 @@ async function reconcile(t, d, { force = false } = {}) {
     return d;
   }
 
+  // A pick written a moment ago is not stuck, it is IN FLIGHT — the request
+  // that wrote it is somewhere between claiming the number and advancing the
+  // clock. Repairing that one does real damage: this writes the roster row
+  // first, the original request's own write then fails on the unique index, and
+  // it unwinds by deleting its pick — taking the record of the board entries it
+  // cleared with it. The mock draft found exactly that, as board entries
+  // quietly going missing.
+  //
+  // So reconciliation waits. Ten seconds is far longer than the two writes take
+  // and far shorter than anybody would sit looking at a wedged draft.
+  const IN_FLIGHT_MS = 10_000;
+  if (last && Date.now() - new Date(last.created_at).getTime() < IN_FLIGHT_MS) {
+    reconciled.delete(t.id);   // look again once it has settled
+    return d;
+  }
+
   const max = last?.pick_number || 0;
 
-  // The roster row for the newest pick. Written after the pick and before the
-  // advance, so it is the half most likely to be missing.
-  if (last) {
-    const { data: onRoster } = await supabase
-      .from('team_players').select('id')
-      .eq('tournament_id', t.id).eq('signup_id', last.signup_id).maybeSingle();
+  // EVERY pick without a roster row, not just the newest one.
+  //
+  // Repairing only the last pick was the first version and the mock draft
+  // showed why it is not enough: the expiry timer runs alongside requests, so
+  // an interrupted pick is not necessarily the most recent one by the time
+  // anybody looks. An orphan left in the middle of the draft is a player who is
+  // on the record as drafted and on nobody's roster — still offered in the
+  // pool, and draftable a second time by another team.
+  //
+  // Two indexed reads and a set difference, and only when something actually
+  // moved — see the memo above.
+  const [{ data: allPicks }, { data: onRosters }] = await Promise.all([
+    supabase.from('draft_picks').select('pick_number, team_id, signup_id, round')
+      .eq('tournament_id', t.id).order('pick_number', { ascending: true }),
+    supabase.from('team_players').select('signup_id').eq('tournament_id', t.id),
+  ]);
+  const rosteredNow = new Set((onRosters || []).map((r) => r.signup_id));
+  const orphans = (allPicks || []).filter((p) => !rosteredNow.has(p.signup_id));
 
-    if (!onRoster) {
-      console.warn(`draft reconcile: pick ${max} had no roster row — writing it`);
-      const { error: addErr } = await addToRoster(t.id, last.team_id, last.signup_id, 'draft', {
-        draft_round: last.round, draft_pick: last.pick_number,
-      });
-      if (addErr) console.error('draft reconcile roster write failed:', addErr.message);
+  for (const orphan of orphans) {
+    console.warn(`draft reconcile: pick ${orphan.pick_number} had no roster row — writing it`);
+    const { error: addErr, cleared } = await addToRoster(t.id, orphan.team_id, orphan.signup_id, 'draft', {
+      draft_round: orphan.round, draft_pick: orphan.pick_number,
+    });
+    if (addErr) {
+      console.error(`draft reconcile roster write failed for pick ${orphan.pick_number}:`, addErr.message);
+    } else if (cleared?.length) {
+      // Joining a roster deletes the player from every captain's board, and
+      // this is the ONLY record of what those entries were. Without writing
+      // them onto the pick, a repaired pick is one that undo and reset can no
+      // longer give back — the boards would be quietly gone.
+      const { error: noteErr } = await supabase.from('draft_picks')
+        .update({ cleared_entries: cleared })
+        .eq('tournament_id', t.id).eq('pick_number', orphan.pick_number);
+      if (noteErr) console.warn(`draft reconcile could not record cleared entries: ${noteErr.message}`);
     }
   }
 
@@ -413,19 +472,16 @@ async function makePick(t, d, { teamId, signupId, auto = false, madeBy = null, r
     const detail = `${insErr.message || ''} ${insErr.details || ''}`;
     if (/draft_picks_number_unique/.test(detail)) {
       // Two readings, and they need different answers. Usually this is the
-      // other captain beating them by milliseconds, which is fine and the board
-      // has genuinely moved on. But it is ALSO exactly what a draft wedged by a
-      // crash looks like: the pick number was claimed and the clock never got
-      // past it, so every attempt from here lands on the same taken number
-      // forever. Repair, then say which it was.
-      const fixed = await reconcile(t, d, { force: true });
-      if (fixed && fixed.current_pick !== d.current_pick) {
-        return {
-          error: 'That pick had already been recorded but the clock never moved past it — '
-            + 'probably a restart mid-pick. It has been repaired; the draft is on the next pick now.',
-          code: 409,
-        };
-      }
+      // other captain beating them by milliseconds, which is fine — the board
+      // has genuinely moved on. But it is ALSO what a draft wedged by a crash
+      // looks like: the number was claimed and the clock never got past it.
+      //
+      // Deliberately does NOT repair here. Repairing from inside a losing race
+      // means writing while the WINNER is still mid-write, and the two collide.
+      // Forgetting the memo is enough: the next read reconciles, by which time
+      // the winner has either finished (nothing to do) or the pick is old
+      // enough to be genuinely stuck (repaired then).
+      reconciled.delete(t.id);
       return { error: 'That pick was just made — the board has already moved on.', code: 409 };
     }
     if (/draft_picks_player_once/.test(detail)) {
@@ -483,12 +539,35 @@ async function advance(t, d, justMade) {
       paused_reason: null,
     };
 
+  // THE CLOCK ONLY EVER MOVES FORWARD.
+  //
+  // This guard used to be `.eq('current_pick', justMade)` — advance pick 12 only
+  // if the clock is on 12 — which is the obvious reading and is wrong under
+  // concurrency. The in-process expiry timer runs alongside requests, and two
+  // advances landing out of order could roll the clock BACKWARD onto a pick
+  // already made, wedging the draft on a number the unique index refuses.
+  //
+  // The mock draft caught it as an intermittent "that pick was just made" a few
+  // picks in, roughly one run in three, and it vanished under logging — the
+  // shape of a race, not a logic error.
+  //
+  // `lt` makes the write idempotent and order-independent: a later pick's
+  // advance always wins, an earlier one is silently refused, and a repeat does
+  // nothing. Whether any pick got SKIPPED is a separate question, and reconcile
+  // already answers it — the invariant there is current_pick = highest pick + 1.
   const { data, error } = await supabase.from('drafts').update(patch)
     .eq('tournament_id', t.id)
-    .eq('current_pick', justMade)      // nobody advances the same pick twice
+    .lt('current_pick', justMade + 1)
     .select('*').maybeSingle();
 
   if (error) console.error('draft advance failed:', error.message);
+
+  // No error and no row now means the clock was ALREADY past this pick, which
+  // is fine and expected when two advances overlap. Logged quietly rather than
+  // silently, because a burst of these would say the ordering is off.
+  if (!error && !data) {
+    console.warn(`draft advance: clock was already past pick ${justMade} — nothing to do.`);
+  }
   return data || (await draftRow(t.id));
 }
 
@@ -1227,8 +1306,15 @@ organizerRouter.post('/reset', async (req, res) => {
     });
   }
 
-  const { count } = await supabase.from('draft_picks')
-    .select('id', { count: 'exact', head: true }).eq('tournament_id', t.id);
+  // Every board entry every pick deleted, read BEFORE the picks are — this is
+  // the only place those tiers and ranks still exist.
+  //
+  // Undo restored them one pick at a time and reset did not, which made reset
+  // the more destructive button by far: throwing away a draft also threw away
+  // every captain's evening of ranking, silently, with nothing on screen
+  // suggesting it would. That is exactly the button a mock draft ends on.
+  const { data: picks, count } = await supabase.from('draft_picks')
+    .select('signup_id, cleared_entries', { count: 'exact' }).eq('tournament_id', t.id);
 
   const { error: rmErr } = await supabase.from('team_players').delete()
     .eq('tournament_id', t.id).eq('via', 'draft');
@@ -1236,6 +1322,22 @@ organizerRouter.post('/reset', async (req, res) => {
 
   const { error: pkErr } = await supabase.from('draft_picks').delete().eq('tournament_id', t.id);
   if (pkErr) return res.status(500).json({ error: 'Rosters are cleared but the picks are not — try again.' });
+
+  // Put the boards back. Non-fatal: the draft IS reset either way, and reporting
+  // that as a failure would have somebody reset it twice.
+  const restore = (picks || []).flatMap((p) => (Array.isArray(p.cleared_entries) ? p.cleared_entries : [])
+    .map((e) => ({
+      tournament_id: t.id, team_id: e.team_id, signup_id: p.signup_id,
+      tier: e.tier, rank: e.rank, note: e.note ?? null,
+    })));
+
+  let restored = 0;
+  if (restore.length) {
+    const { error: reErr } = await supabase.from('draft_board_entries')
+      .upsert(restore, { onConflict: 'team_id,signup_id' });
+    if (reErr) console.warn(`draft reset could not restore board entries: ${reErr.message}`);
+    else restored = restore.length;
+  }
 
   const { data, error } = await supabase.from('drafts').update({
     status: 'pending', current_pick: 1, pick_deadline: null, paused_reason: null,
@@ -1246,8 +1348,14 @@ organizerRouter.post('/reset', async (req, res) => {
   invalidate(t.id);
 
   armTimer(t, data);
-  await audit(req.user, 'draft.reset', null, { picks_removed: count || 0 });
-  res.json({ ok: true, draft: data, removed: count || 0 });
+  await audit(req.user, 'draft.reset', null, { picks_removed: count || 0, board_entries_restored: restored });
+  res.json({ ok: true, draft: data, removed: count || 0, restored });
 });
 
-module.exports = { publicRouter, router, organizerRouter, startProblems, reconcilePick, reconcile };
+module.exports = {
+  publicRouter, router, organizerRouter,
+  startProblems, reconcilePick, reconcile,
+  // Exported for scripts/mock-draft.js, so a rehearsal drives the same code
+  // path a real draft night does rather than a copy of it that can drift.
+  makePick, liveDraft, draftRow, chooseAuto,
+};
