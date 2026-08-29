@@ -22,7 +22,7 @@ const path = require('path');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 // Model names churn — keep this swappable without a code change.
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 // Optional reference legend image sent as image 1 on every screenshot read.
 const LEGEND_PATH = process.env.WEAPON_LEGEND_PATH || path.join(__dirname, 'assets', 'weapon-legend.png');
 
