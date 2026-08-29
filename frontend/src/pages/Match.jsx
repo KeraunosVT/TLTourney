@@ -51,11 +51,13 @@ export default function Match() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function parse(file) {
+  async function parse(files) {
     setBusy(true);
     setBanner(null);
     const form = new FormData();
-    form.append('file', file);
+    // One field name, appended once per file — a paginated scoreboard is ten
+    // screenshots and they are read as one board.
+    [...files].forEach((f) => form.append('files', f));
     try {
       const { data: d } = await api.post(`/api/organizer/results/parse/${encodeURIComponent(key)}`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -140,10 +142,13 @@ export default function Match() {
         <Panel title="Add a scoreboard" className="mb-4 max-w-[900px] border-crimson/25">
           <div className="p-4 flex flex-col gap-3">
             <p className="text-[13px] text-ash leading-relaxed max-w-[70ch]">
-              Upload the end-of-match screenshot (or a CSV). It is read, matched against both
-              rosters, and shown to you to check — <span className="text-bone">nothing is saved
-              until you press save</span>. The winner is never taken from the scoreboard; that
-              stays a decision you make on the bracket.
+              Upload <span className="text-bone">every page</span> of the end-of-match scoreboard
+              at once — select all ten screenshots together. They are read, merged on the
+              scoreboard's own ranking, matched against both rosters, and shown to you to check.
+              Overlapping pages are fine; duplicates collapse and anything the pages disagree
+              about is flagged rather than picked for you.
+              <span className="text-bone"> Nothing is saved until you press save.</span> The winner
+              is never taken from the scoreboard; that stays a decision you make on the bracket.
             </p>
             <div className="flex items-center gap-2 flex-wrap">
               <input
@@ -151,12 +156,13 @@ export default function Match() {
                 type="file"
                 accept="image/*,.csv,text/csv"
                 disabled={busy}
-                onChange={(e) => e.target.files?.[0] && parse(e.target.files[0])}
+                multiple
+                onChange={(e) => e.target.files?.length && parse(e.target.files)}
                 className="text-[13px] text-ash file:mr-3 file:px-3 file:py-1.5 file:rounded file:border
                            file:border-crimson/60 file:bg-crimson/15 file:text-crimsonbright
                            file:text-xs file:font-semibold file:cursor-pointer"
               />
-              {busy && <span className="text-xs text-ash">Reading the screenshot…</span>}
+              {busy && <span className="text-xs text-crimsonbright">Reading… a full board takes a moment.</span>}
               {m.scoreboard_at && (
                 <Button
                   variant="ghost"
@@ -217,6 +223,17 @@ function Review({ review, busy, onPatch, onRemove, onCancel, onCommit }) {
         </span>
       }
     >
+      {review.files?.length > 1 && (
+        <div className="px-4 py-2.5 border-b border-line flex flex-wrap gap-x-4 gap-y-1">
+          {review.files.map((f) => (
+            <span key={f.name} className={`text-[11.5px] ${f.error ? 'text-crimsonbright' : 'text-ash'}`}>
+              {f.error ? '✕' : '✓'} {f.name}
+              <span className="text-dim"> · {f.error ? 'unreadable' : `${f.rows} rows`}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
       {review.warnings?.length > 0 && (
         <div className="px-4 py-3 border-b border-line flex flex-col gap-1">
           {review.warnings.map((w) => (

@@ -84,6 +84,80 @@ function linkSummary(linked) {
   };
 }
 
+// ── Many screenshots, one scoreboard ────────────────────────────────────────
+/**
+ * Merge the pages of a paginated scoreboard into a single set of rows.
+ *
+ * A 50v50 shows a dozen rows at a time, so a full board is ten screenshots, and
+ * people overlap them deliberately so nothing falls between two shots. Merging
+ * them is therefore the normal case, not an edge one.
+ *
+ * KEYED ON RANK, NOT ON NAME. Gear-Gap's version dedupes by lowercase name,
+ * which is the obvious choice and is wrong here for the same reason names are
+ * not identity anywhere else in this file: two players genuinely can share one,
+ * and merging by name would silently fuse them into a single row with one set
+ * of statistics. The scoreboard's own rank is unique down the whole board and
+ * stable across pages, so it is the key; a row with no readable rank falls back
+ * to its name, because half a key beats none.
+ *
+ * Nothing is silently discarded:
+ *   · identical duplicates collapse, and are counted
+ *   · the same rank with DIFFERENT numbers keeps the first and says so — an
+ *     OCR misread of a stat, which somebody should look at
+ *   · the same rank with different NAMES keeps BOTH rows, because that is a
+ *     misread rank and dropping either would lose a player entirely
+ *
+ * @param pages [{ name, players }] — one entry per uploaded file
+ */
+function mergePages(pages) {
+  const seen = new Map();
+  const rows = [];
+  const conflicts = [];
+  let duplicates = 0;
+
+  const STATS = ['kills', 'assists', 'damage_dealt', 'damage_taken', 'healing'];
+
+  (pages || []).forEach((page) => {
+    (page.players || []).forEach((p) => {
+      const rank = Number(p.rank);
+      const key = Number.isInteger(rank) && rank > 0
+        ? `r:${rank}`
+        : `n:${normalizeName(p.player_name)}`;
+
+      const prior = seen.get(key);
+      if (!prior) {
+        seen.set(key, { row: p, from: page.name });
+        rows.push(p);
+        return;
+      }
+
+      // Same slot, different person: a misread rank. Keep both and let the
+      // review decide — dropping one loses a player from the record entirely.
+      if (normalizeName(prior.row.player_name) !== normalizeName(p.player_name)) {
+        conflicts.push(
+          `Rank ${rank} reads as "${prior.row.player_name}" in ${prior.from} and `
+          + `"${p.player_name}" in ${page.name} — both kept, delete whichever is wrong.`
+        );
+        rows.push(p);
+        return;
+      }
+
+      const differs = STATS.filter((f) => Number(prior.row[f] || 0) !== Number(p[f] || 0));
+      if (differs.length) {
+        conflicts.push(
+          `${p.player_name} appears in ${prior.from} and ${page.name} with different `
+          + `${differs.join(', ')} — kept the first, check it.`
+        );
+      } else {
+        duplicates += 1;
+      }
+    });
+  });
+
+  rows.sort((a, b) => (Number(a.rank) || 9999) - (Number(b.rank) || 9999));
+  return { rows, duplicates, conflicts };
+}
+
 // ── One player's history ────────────────────────────────────────────────────
 const num = (v) => {
   // bigint columns can arrive as strings from PostgREST when they are large
@@ -248,5 +322,5 @@ function rank(entries, by = 'damage_dealt') {
 }
 
 module.exports = {
-  normalizeName, linkRows, linkSummary, playerProfile, leaderboard, rank, SORTS, isSort,
+  normalizeName, linkRows, linkSummary, mergePages, playerProfile, leaderboard, rank, SORTS, isSort,
 };

@@ -267,3 +267,110 @@ test('ranking does not mutate what it was given', () => {
   rank(entries, 'damage_dealt');
   assert.deepStrictEqual(entries.map((e) => e.player_name), before);
 });
+
+// ── Merging the pages of one scoreboard ─────────────────────────────────────
+// A 50v50 board is a dozen rows on screen, so a full one is ten screenshots and
+// people overlap them on purpose. Merging is the normal path, and every way of
+// getting it wrong loses or invents a player silently.
+const { mergePages } = require('../../shared/scoreboard.cjs');
+
+const page = (name, players) => ({ name, players });
+const p2 = (rank, player_name, over = {}) => ({
+  rank, player_name, weapon_1: 'Staff', weapon_2: 'Wand',
+  kills: 1, assists: 1, damage_dealt: 100, damage_taken: 10, healing: 5, ...over,
+});
+
+test('pages join up into one board, in rank order', () => {
+  const { rows } = mergePages([
+    page('2.png', [p2(3, 'C'), p2(4, 'D')]),
+    page('1.png', [p2(1, 'A'), p2(2, 'B')]),
+  ]);
+  assert.deepStrictEqual(rows.map((r) => r.player_name), ['A', 'B', 'C', 'D']);
+});
+
+test('overlapping pages collapse rather than double anybody', () => {
+  // Deliberate overlap is how people avoid missing a row between two shots, so
+  // this has to be free of consequence — a doubled row is a doubled stat line.
+  const { rows, duplicates, conflicts } = mergePages([
+    page('1.png', [p2(1, 'A'), p2(2, 'B'), p2(3, 'C')]),
+    page('2.png', [p2(3, 'C'), p2(4, 'D')]),
+  ]);
+  assert.deepStrictEqual(rows.map((r) => r.player_name), ['A', 'B', 'C', 'D']);
+  assert.strictEqual(duplicates, 1);
+  assert.deepStrictEqual(conflicts, []);
+});
+
+test('MERGING IS KEYED ON RANK, SO TWO PLAYERS WITH ONE NAME BOTH SURVIVE', () => {
+  // Gear-Gap's version dedupes by lowercase name. Here that would fuse two
+  // genuinely different people into a single row with one set of numbers, and
+  // the board would simply be one player short with nothing to show for it.
+  const { rows, conflicts } = mergePages([
+    page('1.png', [p2(4, 'Keraunos', { kills: 9 }), p2(11, 'Keraunos', { kills: 2 })]),
+  ]);
+  assert.strictEqual(rows.length, 2);
+  assert.deepStrictEqual(rows.map((r) => r.kills), [9, 2]);
+  assert.deepStrictEqual(conflicts, []);
+});
+
+test('pages that disagree about a number keep the first and SAY SO', () => {
+  // OCR reads the same cell twice and gets two answers. Picking one silently is
+  // how a wrong stat enters the record with nobody having seen a choice.
+  const { rows, conflicts, duplicates } = mergePages([
+    page('1.png', [p2(1, 'A', { damage_dealt: 1000 })]),
+    page('2.png', [p2(1, 'A', { damage_dealt: 1200 })]),
+  ]);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].damage_dealt, 1000);
+  assert.strictEqual(duplicates, 0, 'a disagreement is not a clean duplicate');
+  assert.strictEqual(conflicts.length, 1);
+  assert.match(conflicts[0], /damage_dealt/);
+  assert.match(conflicts[0], /1\.png/);
+});
+
+test('the same rank with DIFFERENT names keeps both rows', () => {
+  // That is a misread rank, not a duplicate. Dropping either loses a player
+  // from the scoreboard entirely, which is the one outcome with no recovery.
+  const { rows, conflicts } = mergePages([
+    page('1.png', [p2(7, 'Alpha')]),
+    page('2.png', [p2(7, 'Bravo')]),
+  ]);
+  assert.strictEqual(rows.length, 2);
+  assert.deepStrictEqual(rows.map((r) => r.player_name).sort(), ['Alpha', 'Bravo']);
+  assert.match(conflicts[0], /both kept/i);
+});
+
+test('rows with no readable rank fall back to matching on name', () => {
+  const { rows, duplicates } = mergePages([
+    page('1.png', [p2(0, 'Ghost')]),
+    page('2.png', [p2(0, 'Ghost')]),
+  ]);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(duplicates, 1);
+});
+
+test('a page that failed to read contributes nothing and breaks nothing', () => {
+  const { rows } = mergePages([
+    page('1.png', [p2(1, 'A')]),
+    { name: '2.png', players: [], error: 'unreadable' },
+    page('3.png', [p2(2, 'B')]),
+  ]);
+  assert.deepStrictEqual(rows.map((r) => r.player_name), ['A', 'B']);
+});
+
+test('no pages at all is an empty board, not a crash', () => {
+  assert.deepStrictEqual(mergePages([]).rows, []);
+  assert.deepStrictEqual(mergePages(null).rows, []);
+});
+
+test('a full ten-page board with overlap comes out whole and once', () => {
+  // The real shape: 100 players, twelve rows a page, one row of overlap.
+  const all = Array.from({ length: 100 }, (_, i) => p2(i + 1, `P${i + 1}`));
+  const pages = [];
+  for (let start = 0; start < 100; start += 11) {
+    pages.push(page(`page${pages.length + 1}.png`, all.slice(start, start + 12)));
+  }
+  const { rows, conflicts } = mergePages(pages);
+  assert.strictEqual(rows.length, 100, 'every player exactly once');
+  assert.deepStrictEqual(conflicts, []);
+  assert.deepStrictEqual(rows.map((r) => r.rank), all.map((r) => r.rank), 'in rank order, no gaps');
+});

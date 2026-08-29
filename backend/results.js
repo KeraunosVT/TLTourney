@@ -24,17 +24,40 @@ const { supabase, currentTournament, audit } = require('./db');
 const { parseScreenshot, parseCsv } = require('./ingest');
 const { rostersByTeam } = require('./teams');
 const {
-  linkRows, linkSummary, playerProfile, leaderboard, rank, SORTS, isSort,
+  linkRows, linkSummary, mergePages, playerProfile, leaderboard, rank, SORTS, isSort,
 } = require('../shared/scoreboard.cjs');
 const { classify } = require('../shared/classes.cjs');
 
 // In memory, not on disk: a scoreboard screenshot is read once and never needed
 // again, and writing it to the filesystem of whatever host this is on would be
 // a file nobody deletes.
+// A 50v50 scoreboard is paginated — a dozen rows on screen at a time — so a
+// full board is ten or so screenshots, and people overlap them so nothing falls
+// between two shots. Batch upload is the normal case here, not a convenience.
+const MAX_FILES = 20;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 12 * 1024 * 1024 },
+  limits: { fileSize: 12 * 1024 * 1024, files: MAX_FILES },
 });
+
+// Gemini calls run a few at a time rather than all at once. Ten concurrent
+// vision requests is how a free-tier key earns a 429, and a rate-limited batch
+// fails as "some of your screenshots didn't read" — the least useful possible
+// error on the night.
+const LANES = 3;
+
+async function inLanes(items, worker) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(LANES, items.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await worker(items[i], i);
+    }
+  }));
+  return out;
+}
 
 const STAT_COLS = 'id, match_id, signup_id, team_id, rank, weapon_1, weapon_2, guild_name, '
   + 'player_name, team_color, kills, assists, damage_dealt, damage_taken, healing, created_at';
@@ -168,11 +191,12 @@ const organizerRouter = express.Router();
  * Comes back with the rows already matched against both teams' rosters, so the
  * review starts from "check these" rather than "fill all of this in".
  */
-organizerRouter.post('/parse/:key', upload.single('file'), async (req, res) => {
+organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
   const t = await currentTournament();
   if (!t) return res.status(409).json({ error: 'No tournament is running.' });
-  if (!req.file) return res.status(400).json({ error: 'Attach a screenshot or a CSV.' });
+  const files = req.files || [];
+  if (files.length === 0) return res.status(400).json({ error: 'Attach one or more screenshots, or a CSV.' });
 
   const { data: match } = await supabase.from('matches')
     .select('id, key, team_a_id, team_b_id')
@@ -182,19 +206,34 @@ organizerRouter.post('/parse/:key', upload.single('file'), async (req, res) => {
     return res.status(409).json({ error: 'Both teams have to be decided before this match can have a scoreboard.' });
   }
 
-  let parsed;
-  try {
-    const isCsv = /csv|text\/plain/i.test(req.file.mimetype) || /\.csv$/i.test(req.file.originalname || '');
-    parsed = isCsv
-      ? parseCsv(req.file.buffer.toString('utf8'))
-      : await parseScreenshot(req.file.buffer, req.file.mimetype);
-  } catch (err) {
-    console.error('scoreboard parse failed:', err.message);
-    // The message is the useful part here — "GEMINI_API_KEY is not set" and
-    // "Gemini did not return valid JSON" send you to completely different
-    // places, and a generic failure sends you to neither.
-    return res.status(502).json({ error: err.message });
+  // Each page is read on its own and a failure is reported PER FILE rather than
+  // failing the batch. Nine screenshots that read and one that didn't is nine
+  // pages of work kept and one to retake; throwing the lot away because the
+  // last one was blurry is not.
+  const pages = await inLanes(files, async (f) => {
+    const isCsv = /csv|text\/plain/i.test(f.mimetype) || /\.csv$/i.test(f.originalname || '');
+    try {
+      const out = isCsv
+        ? parseCsv(f.buffer.toString('utf8'))
+        : await parseScreenshot(f.buffer, f.mimetype);
+      return { name: f.originalname || 'file', players: out.players, warnings: out.warnings || [], usedLegend: out.usedLegend };
+    } catch (err) {
+      console.error(`scoreboard parse failed (${f.originalname}):`, err.message);
+      // The message is the useful part — "GEMINI_API_KEY is not set" and
+      // "Gemini did not return valid JSON" send you to completely different
+      // places, and a generic failure sends you to neither.
+      return { name: f.originalname || 'file', players: [], error: err.message };
+    }
+  });
+
+  const failed = pages.filter((p) => p.error);
+  if (failed.length === files.length) {
+    // Every one failed, so it is not the screenshots — it is the key, the
+    // model, or the network. Say the first reason rather than a tally.
+    return res.status(502).json({ error: failed[0].error });
   }
+
+  const merged = mergePages(pages);
 
   let roster;
   try {
@@ -204,12 +243,26 @@ organizerRouter.post('/parse/:key', upload.single('file'), async (req, res) => {
     return res.status(500).json({ error: 'Could not read the rosters to match names against.' });
   }
 
-  const linked = linkRows(parsed.players, roster);
+  const linked = linkRows(merged.rows, roster);
+
+  const warnings = [
+    ...failed.map((p) => `${p.name} could not be read: ${p.error}`),
+    ...merged.conflicts,
+    ...(files.length > 1
+      ? [`Merged ${files.length - failed.length} of ${files.length} files into ${merged.rows.length} rows`
+        + `${merged.duplicates ? `, ${merged.duplicates} duplicate row(s) collapsed` : ''}.`]
+      : []),
+    // Per-file warnings from the reader itself, de-duplicated: ten pages each
+    // saying "3 rows have a weapon to confirm" is ten copies of one fact.
+    ...[...new Set(pages.flatMap((p) => p.warnings || []))],
+  ];
+
   res.json({
     rows: linked.map((r) => ({ ...r, class: classify(r.weapon_1, r.weapon_2) })),
     summary: linkSummary(linked),
-    warnings: parsed.warnings || [],
-    usedLegend: parsed.usedLegend ?? null,
+    warnings,
+    files: pages.map((p) => ({ name: p.name, rows: p.players.length, error: p.error || null })),
+    usedLegend: pages.find((p) => p.usedLegend !== undefined)?.usedLegend ?? null,
     // The two rosters, so the review can offer a dropdown per unmatched row.
     roster,
   });
