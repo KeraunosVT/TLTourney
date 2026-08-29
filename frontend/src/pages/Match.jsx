@@ -291,11 +291,11 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
   return (
     <Panel
       title="Check this before saving"
-      subtitle="Rows that could not be matched are at the top"
+      subtitle="The colour says which team a row counts for; “whose stats” says which player on it. Unmatched rows are at the top.
       className="border-crimson/40"
       right={
         <span className="text-xs text-ash">
-          {live.matched} of {live.total} matched to players
+          {live.matched} of {live.total} rows have a player
         </span>
       }
     >
@@ -360,8 +360,8 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
           <thead>
             <tr className="text-ash text-[10px] uppercase tracking-[0.1em]">
               <th className="text-left px-2 py-2 font-semibold">#</th>
-              <th className="text-left px-2 py-2 font-semibold">Name on the scoreboard</th>
-              <th className="text-left px-2 py-2 font-semibold">Who is this</th>
+              <th className="text-left px-2 py-2 font-semibold">Name as read</th>
+              <th className="text-left px-2 py-2 font-semibold">Whose stats</th>
               <th className="text-left px-2 py-2 font-semibold">Class</th>
               <th className="text-right px-2 py-2 font-semibold">K</th>
               <th className="text-right px-2 py-2 font-semibold">A</th>
@@ -408,10 +408,12 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
                       onPatch(i, { signup_id: who?.id || null, team_id: who?.team_id || null });
                     }}
                   >
-                    {/* Not "unknown" — a deliberate choice. Plenty of rows are
-                        genuinely nobody's: opponents, spectators, a guild that
-                        wandered through. Those must be saveable as such. */}
-                    <option value="">— not one of these teams —</option>
+                    {/* The wording matters. This said "not one of these teams",
+                        which reads as a question about WHICH TEAM — and the
+                        colour above already decides that. This column decides
+                        which PERSON on that team the row's numbers belong to,
+                        and leaving it empty means nobody's profile gets them. */}
+                    <option value="">— nobody, don't count it —</option>
                     {/* Only the side this row played on. A Yellow row cannot
                         be a Red player, so offering the other roster is
                         offering a hundred wrong answers. */}
@@ -486,9 +488,10 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
           {busy ? 'Saving…' : `Save ${live.total} rows`}
         </Button>
         <Button variant="ghost" disabled={busy} onClick={onCancel}>Discard</Button>
-        <p className="text-xs text-ash ml-2 max-w-[60ch] leading-relaxed">
-          Saving replaces any scoreboard already stored for this match. Rows left as “not one of
-          these teams” are kept as evidence but counted for nobody.
+        <p className="text-xs text-ash ml-2 max-w-[62ch] leading-relaxed">
+          Saving replaces any scoreboard already stored for this match. Rows left as “nobody” are
+          kept as evidence — they still show on this match — but they are not added to anyone's
+          totals or profile.
         </p>
       </div>
     </Panel>
