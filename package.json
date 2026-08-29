@@ -9,6 +9,8 @@
     "dev:api": "cd backend && npm start",
     "_comment_mock": "Runs a whole draft against the real database and puts everything back. Refuses to touch a draft that is live or paused. Args: team count, rounds.",
     "mock": "node backend/scripts/mock-draft.js",
+    "_comment_mock_bracket": "Draws a bracket on the real database, plays it to a champion with maps and bans, commits a scoreboard, and removes it all. Refuses to run if any match already exists. Arg: team count.",
+    "mock-bracket": "node backend/scripts/mock-bracket.js",
     "dev:web": "cd frontend && npm run dev",
     "_comment_build": "Installs both halves itself rather than trusting postinstall. A host that runs `npm install --ignore-scripts` (several do) skips postinstall silently, and the failure surfaces much later as `vite: not found` at build time, or `Cannot find module 'express'` at boot. Repeating an install that already happened costs a few seconds; not doing one costs the deploy.",
     "_comment_include_dev": "--include=dev is load-bearing on the frontend install. vite, tailwind, postcss and autoprefixer are devDependencies, and npm SKIPS devDependencies whenever NODE_ENV=production — which it is on the live host, because the server needs it for secure cookies. Without this flag the deploy installs the frontend's runtime deps, then dies on `vite: not found` with a NODE_ENV nobody thinks to blame.",

@@ -181,11 +181,17 @@ async function bracketState(tournamentId) {
     teams,
     matches,
     champion,
-    counts: {
-      total: matches.filter((m) => m.kind === 'match').length,
-      complete: matches.filter((m) => m.kind === 'match' && m.status === 'complete').length,
-      ready: matches.filter((m) => m.status === 'ready').length,
-    },
+    // The reset is only a fixture once the losers bracket has forced it. Counted
+    // unconditionally, a finished tournament read "10 of 11 played" forever,
+    // with the missing one being a match that was never going to happen.
+    counts: (() => {
+      const live = matches.filter((m) => m.kind === 'match' && (!m.is_reset || m.team_a_id));
+      return {
+        total: live.length,
+        complete: live.filter((m) => m.status === 'complete').length,
+        ready: live.filter((m) => m.status === 'ready').length,
+      };
+    })(),
   };
 }
 
@@ -257,7 +263,7 @@ organizerRouter.post('/generate', async (req, res) => {
   }
 
   const { data: existing, error: exErr } = await supabase
-    .from('matches').select('key, status').eq('tournament_id', t.id);
+    .from('matches').select('key, status, decided_by').eq('tournament_id', t.id);
   if (exErr) {
     if (/schema cache|does not exist|relation/i.test(exErr.message)) {
       return res.status(503).json({
@@ -267,7 +273,11 @@ organizerRouter.post('/generate', async (req, res) => {
     return res.status(500).json({ error: 'Could not read the existing bracket.' });
   }
 
-  const played = (existing || []).filter((m) => m.status === 'complete' && m.key);
+  // A BYE IS NOT A PLAYED MATCH. Generating settles the walkovers on the way
+  // out, which marks them complete — so counting completed matches read a
+  // freshly drawn bracket as one that had already been played, and refused to
+  // redraw it. Nobody had played anything.
+  const played = (existing || []).filter((m) => m.status === 'complete' && m.decided_by !== 'bye');
   if (played.length > 0) {
     return res.status(409).json({
       error: `${played.length} matches have already been played — the bracket cannot be regenerated. `
@@ -293,7 +303,16 @@ organizerRouter.post('/generate', async (req, res) => {
   }
 
   // Seed the first round, then let walkovers cascade.
-  const bySeed = new Map(teams.map((x) => [x.seed, x.id]));
+  // POSITION in the seed order, not the raw seed value.
+  //
+  // generateBracket produces slots for seeds 1..n. teams.seed is any integer a
+  // human typed — reseed writes 1..N, but a hand-edited seed can be 12, or 9000,
+  // or leave a gap. Matching on the raw value silently placed only the teams
+  // whose seed happened to fall inside 1..n and left every other slot empty:
+  // a bracket that generated without error and had nobody in it.
+  //
+  // The mock bracket caught this on its first run, with teams seeded 9000+.
+  const bySeed = new Map(teams.map((x, i) => [i + 1, x.id]));
   for (const m of g.matches) {
     const fields = {};
     if (m.a.type === 'seed' && bySeed.has(m.a.seed)) fields.team_a_id = bySeed.get(m.a.seed);
