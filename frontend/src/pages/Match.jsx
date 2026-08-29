@@ -291,7 +291,7 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
   return (
     <Panel
       title="Check this before saving"
-      subtitle="The colour says which team a row counts for; “whose stats” says which player on it. Unmatched rows are at the top.
+      subtitle="The colour says which team a row counts for; “whose stats” says which player on it. Unmatched rows are at the top."
       className="border-crimson/40"
       right={
         <span className="text-xs text-ash">
