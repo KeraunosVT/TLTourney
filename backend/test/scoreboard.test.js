@@ -479,3 +479,37 @@ test('with the sides unknown, every player is still offered', () => {
   const all = candidatesFor(srow('x', 'Yellow'), sideRoster, { Yellow: null, Red: null });
   assert.strictEqual(all.length, 4);
 });
+
+// ── The class round-trip the review depends on ──────────────────────────────
+// The review shows ONE class where the scoreboard has two weapon icons.
+// Choosing a class writes its weapon pair, and reading it back has to give the
+// same class — otherwise a reviewer's correction silently does not stick, and
+// the row they just fixed comes back unknown.
+const { CLASS_NAMES, WEAPONS_FOR, classify } = require('../../shared/classes.cjs');
+
+test('EVERY CLASS SURVIVES BEING WRITTEN AS WEAPONS AND READ BACK', () => {
+  const broken = CLASS_NAMES.filter((c) => {
+    const [w1, w2] = WEAPONS_FOR[c] || [];
+    return classify(w1, w2) !== c;
+  });
+  assert.deepStrictEqual(broken, [], 'these classes do not round-trip');
+  assert.strictEqual(CLASS_NAMES.length, 45);
+});
+
+test('a pair that is not a class reads back as nothing, not as a guess', () => {
+  // The review shows this as "unknown" and asks for a class. Inventing one
+  // would put a class in the record that the icons never said.
+  assert.strictEqual(classify('Staff', 'Staff'), null);
+  assert.strictEqual(classify('Staff', 'Unknown'), null);
+  assert.strictEqual(classify('Staff', null), null);
+  assert.strictEqual(classify(null, null), null);
+});
+
+test('the order the two icons were read in does not change the class', () => {
+  // Gemini is told left icon then right icon, and gets it backwards sometimes.
+  // That must not turn a known class into an unknown one.
+  CLASS_NAMES.forEach((c) => {
+    const [w1, w2] = WEAPONS_FOR[c];
+    assert.strictEqual(classify(w2, w1), c, `${c} reversed`);
+  });
+});

@@ -13,7 +13,7 @@ import { useParams, Link } from 'react-router-dom';
 import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Note, Empty } from '../components/ui';
 import { useAuth } from '../auth';
-import { WEAPONS } from '@shared/classes.cjs';
+import { CLASS_NAMES, WEAPONS_FOR, classify, weaponsLabel } from '@shared/classes.cjs';
 import { applySides, candidatesFor } from '@shared/scoreboard.cjs';
 
 // 3254684 → "3.25M". A scoreboard is a wall of seven-digit numbers, and nobody
@@ -39,6 +39,12 @@ export default function Match() {
   const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
 
+  // Which team played which colour, chosen BEFORE the read. The organizer was
+  // watching the match; asking them is two clicks and beats inferring it from
+  // names that have just been through OCR. The inference still runs on the
+  // server, but only to argue back if these look reversed.
+  const [sides, setSides] = useState({ Yellow: '', Red: '' });
+
   const load = useCallback(async () => {
     try {
       const { data: d } = await api.get(`/api/stats/match/${encodeURIComponent(key)}`);
@@ -52,6 +58,15 @@ export default function Match() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    // Seeded from the bracket's own A/B order so the pickers are never empty,
+    // but it is a guess about a colour and the organizer has to confirm it —
+    // which is why the button below says so rather than just being enabled.
+    if (data?.match?.team_a_id && !sides.Yellow && !sides.Red) {
+      setSides({ Yellow: data.match.team_a_id, Red: data.match.team_b_id });
+    }
+  }, [data?.match?.team_a_id, data?.match?.team_b_id]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   async function parse(files) {
     setBusy(true);
     setBanner(null);
@@ -59,6 +74,8 @@ export default function Match() {
     // One field name, appended once per file — a paginated scoreboard is ten
     // screenshots and they are read as one board.
     [...files].forEach((f) => form.append('files', f));
+    form.append('yellow_team_id', sides.Yellow);
+    form.append('red_team_id', sides.Red);
     try {
       const { data: d } = await api.post(`/api/organizer/results/parse/${encodeURIComponent(key)}`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -107,10 +124,13 @@ export default function Match() {
   // Changing which team played which colour re-teams EVERY row, including the
   // ones whose name matched nobody. That is the point of the colour deciding
   // it rather than the name.
-  const setSides = (sides) => setReview((prev) => ({
+  // Distinct from the `sides` state above, which is chosen before the upload.
+  // This one corrects the sides on a read that already happened, without
+  // making somebody upload ten screenshots again to fix two clicks.
+  const resideReview = (next) => setReview((prev) => ({
     ...prev,
-    sides,
-    rows: applySides(prev.rows, sides, prev.roster),
+    sides: next,
+    rows: applySides(prev.rows, next, prev.roster),
   }));
 
   if (loading) return <div className="p-8 text-sm text-ash">Loading…</div>;
@@ -160,12 +180,56 @@ export default function Match() {
               <span className="text-bone"> Nothing is saved until you press save.</span> The winner
               is never taken from the scoreboard; that stays a decision you make on the bracket.
             </p>
+            {/* Set BEFORE the read. The colour decides which team every row
+                counts for, so getting it backwards puts a whole match on the
+                wrong two teams — and every number would still look plausible. */}
+            <div className="flex items-center gap-4 flex-wrap border-t border-b border-line py-3">
+              {['Yellow', 'Red'].map((colour) => (
+                <label key={colour} className="flex items-center gap-2">
+                  <span
+                    className={`text-[11px] uppercase tracking-[0.12em] font-semibold ${
+                      colour === 'Yellow' ? 'text-[#d8b657]' : 'text-crimsonbright'
+                    }`}
+                  >
+                    {colour} was
+                  </span>
+                  <select
+                    className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px]
+                               outline-none focus:border-crimson"
+                    value={sides[colour]}
+                    onChange={(e) => {
+                      const other = colour === 'Yellow' ? 'Red' : 'Yellow';
+                      const swapTo = sides[colour];
+                      setSides((p) => ({
+                        ...p,
+                        [colour]: e.target.value,
+                        // Two teams, two colours — picking one for a colour
+                        // necessarily gives the other colour the other team.
+                        [other]: p[other] === e.target.value ? swapTo : p[other],
+                      }));
+                    }}
+                  >
+                    <option value="">— choose —</option>
+                    {[m.team_a, m.team_b].filter(Boolean).map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+              <button
+                onClick={() => setSides((p) => ({ Yellow: p.Red, Red: p.Yellow }))}
+                className="text-[11.5px] text-ash hover:text-bone underline underline-offset-2"
+              >
+                swap
+              </button>
+            </div>
+
             <div className="flex items-center gap-2 flex-wrap">
               <input
                 ref={fileRef}
                 type="file"
                 accept="image/*,.csv,text/csv"
-                disabled={busy}
+                disabled={busy || !sides.Yellow || !sides.Red || sides.Yellow === sides.Red}
                 multiple
                 onChange={(e) => e.target.files?.length && parse(e.target.files)}
                 className="text-[13px] text-ash file:mr-3 file:px-3 file:py-1.5 file:rounded file:border
@@ -173,6 +237,9 @@ export default function Match() {
                            file:text-xs file:font-semibold file:cursor-pointer"
               />
               {busy && <span className="text-xs text-crimsonbright">Reading… a full board takes a moment.</span>}
+              {!busy && (!sides.Yellow || !sides.Red || sides.Yellow === sides.Red) && (
+                <span className="text-xs text-crimsonbright">Set both colours first.</span>
+              )}
               {m.scoreboard_at && (
                 <Button
                   variant="ghost"
@@ -196,7 +263,7 @@ export default function Match() {
           review={review}
           busy={busy}
           onPatch={patch}
-          onSides={setSides}
+          onSides={resideReview}
           onRemove={(i) => setReview((p) => ({ ...p, rows: p.rows.filter((_, n) => n !== i) }))}
           onCancel={() => setReview(null)}
           onCommit={commit}
@@ -295,7 +362,7 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
               <th className="text-left px-2 py-2 font-semibold">#</th>
               <th className="text-left px-2 py-2 font-semibold">Name on the scoreboard</th>
               <th className="text-left px-2 py-2 font-semibold">Who is this</th>
-              <th className="text-left px-2 py-2 font-semibold">Weapons</th>
+              <th className="text-left px-2 py-2 font-semibold">Class</th>
               <th className="text-right px-2 py-2 font-semibold">K</th>
               <th className="text-right px-2 py-2 font-semibold">A</th>
               <th className="text-right px-2 py-2 font-semibold">Damage</th>
@@ -364,20 +431,30 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
                   )}
                 </td>
                 <td className="px-2 py-1.5">
-                  <div className="flex gap-1">
-                    {['weapon_1', 'weapon_2'].map((w) => (
-                      <select
-                        key={w}
-                        className="bg-panelup border border-line rounded px-1 py-1 text-[11.5px]
-                                   outline-none focus:border-crimson"
-                        value={WEAPONS.includes(r[w]) ? r[w] : ''}
-                        onChange={(e) => onPatch(i, { [w]: e.target.value })}
-                      >
-                        <option value="">{r[w] || '?'}</option>
-                        {WEAPONS.map((x) => <option key={x} value={x}>{x}</option>)}
-                      </select>
-                    ))}
-                  </div>
+                  {/* ONE class, not two weapons. The weapon pair is what the
+                      screenshot shows and what the model reads, but nobody
+                      thinks in pairs — a reviewer looking at an icon they don't
+                      recognise knows the CLASS, and picking it writes both
+                      weapons underneath. Two dropdowns of ten weapons is a
+                      hundred combinations, most of which are not a class. */}
+                  <select
+                    className={`w-full bg-panelup border rounded px-1.5 py-1 text-[12px] outline-none
+                      focus:border-crimson ${classify(r.weapon_1, r.weapon_2) ? 'border-line' : 'border-crimson/70'}`}
+                    title={weaponsLabel(classify(r.weapon_1, r.weapon_2)) || `${r.weapon_1 || '?'} · ${r.weapon_2 || '?'}`}
+                    value={classify(r.weapon_1, r.weapon_2) || ''}
+                    onChange={(e) => {
+                      const [w1, w2] = WEAPONS_FOR[e.target.value] || [null, null];
+                      onPatch(i, { weapon_1: w1, weapon_2: w2 });
+                    }}
+                  >
+                    {/* The unreadable case keeps what the model actually said,
+                        so a reviewer can see WHY it failed rather than an empty
+                        box that could mean anything. */}
+                    <option value="">
+                      {r.weapon_1 || r.weapon_2 ? `? ${r.weapon_1 || '?'} · ${r.weapon_2 || '?'}` : '— unknown —'}
+                    </option>
+                    {CLASS_NAMES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </td>
                 {['kills', 'assists', 'damage_dealt', 'damage_taken', 'healing'].map((f) => (
                   <td key={f} className="px-2 py-1.5">
@@ -477,7 +554,9 @@ function Saved({ rows, match }) {
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-1.5 text-ash text-[12px]">{r.class}</td>
+                <td className="px-3 py-1.5 text-[12px]" title={`${r.weapon_1 || '?'} · ${r.weapon_2 || '?'}`}>
+                  {r.class || <span className="text-crimsonbright">unknown</span>}
+                </td>
                 <td className="px-3 py-1.5 text-right mono">{r.kills}</td>
                 <td className="px-3 py-1.5 text-right mono">{r.assists}</td>
                 <td className="px-3 py-1.5 text-right mono">{big(r.damage_dealt)}</td>

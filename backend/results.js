@@ -246,11 +246,26 @@ organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req
 
   const named = linkRows(merged.rows, roster);
 
-  // Which colour was which team, voted for by the rows that matched confidently.
-  // Then the COLOUR decides each row's team — including for rows whose name
-  // matched nobody, which is the case this earns its keep on: an unmatched row
-  // still belongs to a side, and the side is on the screenshot.
-  const { sides, confident } = inferSides(named, roster);
+  // The organizer says which team played which colour BEFORE uploading — they
+  // were watching, and it is two clicks against a vote that can be wrong.
+  // Multer puts text fields alongside the files, so they arrive on the body.
+  const pair = [match.team_a_id, match.team_b_id];
+  const asked = {
+    Yellow: pair.includes(req.body?.yellow_team_id) ? req.body.yellow_team_id : null,
+    Red: pair.includes(req.body?.red_team_id) ? req.body.red_team_id : null,
+  };
+  const given = asked.Yellow && asked.Red && asked.Yellow !== asked.Red;
+
+  // Inferred anyway, and NOT to override them — to check them. Picking the two
+  // colours the wrong way round is the easiest mistake on this page to make and
+  // the hardest to see afterwards, because every number lands on the wrong team
+  // and every one of them looks plausible.
+  const voted = inferSides(named, roster);
+  const sides = given ? asked : voted.sides;
+  const confident = given || voted.confident;
+  const contradicted = given && voted.confident
+    && (voted.sides.Yellow !== sides.Yellow || voted.sides.Red !== sides.Red);
+
   const linked = applySides(named, sides, roster);
 
   const warnings = [
@@ -262,8 +277,17 @@ organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req
       : []),
     // Per-file warnings from the reader itself, de-duplicated: ten pages each
     // saying "3 rows have a weapon to confirm" is ten copies of one fact.
-    ...[...new Set(pages.flatMap((p) => p.warnings || []))],
+    ...[...new Set(pages.flatMap((p) => p.warnings || []))]
+      .filter((w) => !/weapon to confirm/i.test(w)),
   ];
+
+  // Restated in the language the review actually uses. ingest.js counts rows
+  // whose WEAPONS it could not place; the table shows a class, so a warning
+  // about weapons sends a reviewer looking for a column that isn't there.
+  const noClass = linked.filter((r) => !classify(r.weapon_1, r.weapon_2)).length;
+  if (noClass) {
+    warnings.push(`${noClass} row(s) have no class the weapons resolve to — set it in the Class column.`);
+  }
 
   const sideConflicts = linked.filter((r) => r.side_conflict).length;
   if (sideConflicts) {
@@ -272,9 +296,15 @@ organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req
       + '— either the name or the colour was misread, so check those first.'
     );
   }
+  if (contradicted) {
+    warnings.push(
+      'The names on the Yellow rows mostly belong to the team you marked as Red, and vice versa — '
+      + 'check you have the two colours the right way round before saving.'
+    );
+  }
   if (!confident) {
     warnings.push(
-      'Could not tell which team played Yellow and which played Red from the names — set it above the table.'
+      'Could not tell which team played Yellow and which played Red — set it above the table.'
     );
   }
 
