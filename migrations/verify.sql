@@ -354,4 +354,46 @@ union all
 select '012 · a match marked as having a scoreboard has one',
        not exists (select 1 from matches m
                    where m.scoreboard_at is not null
-                     and not exists (select 1 from player_match_stats s where s.match_id = m.id));
+                     and not exists (select 1 from player_match_stats s where s.match_id = m.id))
+union all
+-- ── 013 ────────────────────────────────────────────────────────────────────
+select '013 · match_games table',
+       to_regclass('public.match_games') is not null
+union all
+select '013 · a game number belongs to one game',
+       exists (select 1 from pg_constraint where conname = 'match_games_number_unique')
+union all
+select '013 · matches.best_of column',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'matches'
+                 and column_name = 'best_of')
+union all
+-- An even series can end level, and a bracket has no way to record a draw or
+-- advance one — the match would simply never resolve.
+select '013 · best_of must be ODD',
+       exists (select 1 from pg_constraint where conname = 'matches_best_of_odd')
+union all
+select '013 · scoreboards hang off a game',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'player_match_stats'
+                 and column_name = 'game_id')
+union all
+-- The old index was per MATCH, which refused game 2's rows outright. Asserted
+-- GONE: a database still carrying it cannot store a best-of-three.
+select '013 · the per-match scoreboard index is GONE (superseded)',
+       not exists (select 1 from pg_indexes
+                   where schemaname = 'public' and indexname = 'pms_one_row_per_player_per_match')
+union all
+select '013 · one row per player per GAME',
+       exists (select 1 from pg_indexes
+               where schemaname = 'public' and indexname = 'pms_one_row_per_player_per_game')
+union all
+-- A decided match must agree with its own games, or the bracket says one thing
+-- and the scoresheet under it says another.
+select '013 · every decided match won its series',
+       not exists (
+         select 1 from matches m
+          where m.winner_team_id is not null
+            and (select count(*) from match_games g
+                  where g.match_id = m.id and g.winner_team_id = m.winner_team_id)
+                < (m.best_of / 2) + 1);

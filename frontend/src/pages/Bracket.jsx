@@ -176,6 +176,14 @@ function MatchCard({ m, onPick, canRecord, busy }) {
           {m.key}
         </Link>
         {m.scoreboard_at && <span className="text-[9px] uppercase tracking-[0.1em] text-verdigris">stats</span>}
+        {/* The series score, once anything has been played. A bracket card that
+            says only who won loses the difference between a 2-0 and a 2-1. */}
+        {m.series?.played > 0 && (
+          <span className="mono text-[10px] text-ash">{m.series.winsA}—{m.series.winsB}</span>
+        )}
+        {m.best_of > 1 && m.status !== 'complete' && m.series?.played === 0 && (
+          <span className="text-[9px] uppercase tracking-[0.1em] text-dim">bo{m.best_of}</span>
+        )}
         {m.kind === 'walkover' && <span className="text-[9px] uppercase tracking-[0.1em] text-ash">bye</span>}
         {m.status === 'ready' && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">ready</span>}
         {m.is_reset && !dormant && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">reset</span>}

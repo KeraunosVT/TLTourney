@@ -45,6 +45,11 @@ export default function Match() {
   // server, but only to argue back if these look reversed.
   const [sides, setSides] = useState({ Yellow: '', Red: '' });
 
+  // Which game of the series is on screen. A best-of-three has up to three
+  // scoreboards and they are three different sets of numbers.
+  const [game, setGame] = useState(1);
+  const [maps, setMaps] = useState([]);
+
   const load = useCallback(async () => {
     try {
       const { data: d } = await api.get(`/api/stats/match/${encodeURIComponent(key)}`);
@@ -57,6 +62,13 @@ export default function Match() {
   }, [key]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    // Maps already used in this tournament, offered as suggestions. Free text
+    // underneath, so a new map is never refused — this only makes the spelling
+    // converge, which is what makes "which maps did we play" answerable later.
+    api.get('/api/stats/maps').then(({ data }) => setMaps(data.maps || [])).catch(() => {});
+  }, []);
 
   useEffect(() => {
     // Seeded from the bracket's own A/B order so the pickers are never empty,
@@ -76,6 +88,7 @@ export default function Match() {
     [...files].forEach((f) => form.append('files', f));
     form.append('yellow_team_id', sides.Yellow);
     form.append('red_team_id', sides.Red);
+    form.append('game_number', String(game));
     try {
       const { data: d } = await api.post(`/api/organizer/results/parse/${encodeURIComponent(key)}`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -101,6 +114,7 @@ export default function Match() {
     try {
       const { data: d } = await api.post(`/api/organizer/results/commit/${encodeURIComponent(key)}`, {
         rows: review.rows,
+        game_number: game,
       });
       setReview(null);
       setBanner({
@@ -113,6 +127,16 @@ export default function Match() {
       setBanner({ tone: 'bad', text: errorMessage(err) });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveGame(gameNumber, fields) {
+    setBanner(null);
+    try {
+      await api.post('/api/organizer/bracket/game', { key, game_number: gameNumber, ...fields });
+      load();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
     }
   }
 
@@ -168,8 +192,19 @@ export default function Match() {
 
       {banner && <div className="mb-4 max-w-[900px]"><Note tone={banner.tone}>{banner.text}</Note></div>}
 
+      <Games
+        match={m}
+        series={data.series}
+        games={data.games || []}
+        maps={maps}
+        canEdit={canEdit}
+        selected={game}
+        onSelect={setGame}
+        onSave={saveGame}
+      />
+
       {canEdit && !review && (
-        <Panel title="Add a scoreboard" className="mb-4 max-w-[900px] border-crimson/25">
+        <Panel title={`Add the scoreboard for game ${game}`} className="mb-4 max-w-[900px] border-crimson/25">
           <div className="p-4 flex flex-col gap-3">
             <p className="text-[13px] text-ash leading-relaxed max-w-[70ch]">
               Upload <span className="text-bone">every page</span> of the end-of-match scoreboard
@@ -240,17 +275,17 @@ export default function Match() {
               {!busy && (!sides.Yellow || !sides.Red || sides.Yellow === sides.Red) && (
                 <span className="text-xs text-crimsonbright">Set both colours first.</span>
               )}
-              {m.scoreboard_at && (
+              {(data.games || []).find((x) => x.game_number === game)?.scoreboard_at && (
                 <Button
                   variant="ghost"
                   disabled={busy}
                   onClick={async () => {
-                    await api.delete(`/api/organizer/results/match/${encodeURIComponent(key)}`);
+                    await api.delete(`/api/organizer/results/match/${encodeURIComponent(key)}?game=${game}`);
                     load();
                   }}
                   className="ml-auto"
                 >
-                  Clear saved scoreboard
+                  Clear game {game}'s scoreboard
                 </Button>
               )}
             </div>
@@ -270,10 +305,20 @@ export default function Match() {
         />
       )}
 
-      {!review && (
-        data.rows.length === 0
-          ? <Panel><Empty>No scoreboard has been added for this match yet.</Empty></Panel>
-          : <Saved rows={data.rows} match={m} />
+      {!review && (() => {
+        const current = (data.games || []).find((x) => x.game_number === game);
+        const rows = current?.rows || [];
+        return rows.length === 0
+          ? <Panel><Empty>No scoreboard for game {game} yet.</Empty></Panel>
+          : <Saved rows={rows} match={m} game={game} />;
+      })()}
+
+      {/* Rows recorded before the series split matches into games. Shown rather
+          than orphaned into a tab that does not exist. */}
+      {!review && (data.looseRows || []).length > 0 && (
+        <div className="mt-4">
+          <Saved rows={data.looseRows} match={m} game={null} />
+        </div>
       )}
     </div>
   );
@@ -499,7 +544,7 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
 }
 
 // ── The saved scoreboard ────────────────────────────────────────────────────
-function Saved({ rows, match }) {
+function Saved({ rows, match, game }) {
   const [sort, setSort] = useState('damage_dealt');
   const sorted = useMemo(
     () => [...rows].sort((a, b) => (Number(b[sort]) || 0) - (Number(a[sort]) || 0)),
@@ -519,7 +564,7 @@ function Saved({ rows, match }) {
 
   return (
     <Panel
-      title="Scoreboard"
+      title={game ? `Game ${game} scoreboard` : 'Scoreboard (recorded before games)'}
       right={
         <span className="text-xs text-ash">
           {rows.length} rows{unmatched ? ` · ${unmatched} not on either team` : ''}
@@ -570,6 +615,108 @@ function Saved({ rows, match }) {
           </tbody>
         </table>
       </div>
+    </Panel>
+  );
+}
+
+
+// ── The series ──────────────────────────────────────────────────────────────
+// One row per game played, plus the next one while the series is live. Not all
+// three: an empty game 3 under a finished 2-0 invites somebody to fill it in,
+// and a dead rubber recorded as a real game makes the series read 2-1.
+function Games({ match, series, games, maps, canEdit, selected, onSelect, onSave }) {
+  const sides = [match.team_a, match.team_b].filter(Boolean);
+
+  return (
+    <Panel
+      title="Games"
+      subtitle={`Best of ${match.best_of}${series?.decided ? '' : ` · first to ${series?.toWin ?? 2}`}`}
+      className="mb-4"
+      right={
+        <span className="mono text-[15px]">
+          <span className={series?.winnerId === match.team_a_id ? 'text-verdigris' : ''}>{series?.winsA ?? 0}</span>
+          <span className="text-ash mx-1.5">—</span>
+          <span className={series?.winnerId === match.team_b_id ? 'text-verdigris' : ''}>{series?.winsB ?? 0}</span>
+        </span>
+      }
+    >
+      <datalist id="map-names">
+        {maps.map((x) => <option key={x} value={x} />)}
+      </datalist>
+
+      <div className="flex flex-col">
+        {games.map((g) => {
+          const on = g.game_number === selected;
+          return (
+            <div
+              key={g.game_number}
+              className={`px-4 py-2.5 border-b border-line/50 last:border-b-0 flex items-center gap-3 flex-wrap
+                ${on ? 'bg-crimson/[0.07]' : ''} ${g.dead ? 'opacity-50' : ''}`}
+            >
+              <button
+                onClick={() => onSelect(g.game_number)}
+                className={`text-[13px] font-semibold w-[62px] text-left shrink-0 ${
+                  on ? 'text-crimsonbright' : 'text-ash hover:text-bone'
+                }`}
+              >
+                Game {g.game_number}
+              </button>
+
+              {canEdit ? (
+                <input
+                  list="map-names"
+                  className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px] w-[190px]
+                             outline-none focus:border-crimson placeholder:text-ash/60"
+                  placeholder="map"
+                  defaultValue={g.map || ''}
+                  // On blur, not on every keystroke — this writes to the
+                  // database and a map name is typed one character at a time.
+                  onBlur={(e) => {
+                    if ((g.map || '') !== e.target.value.trim()) {
+                      onSave(g.game_number, { map: e.target.value });
+                    }
+                  }}
+                />
+              ) : (
+                <span className="text-[12.5px] text-ash w-[190px] truncate">{g.map || 'map not recorded'}</span>
+              )}
+
+              {canEdit ? (
+                <select
+                  className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px]
+                             outline-none focus:border-crimson"
+                  value={g.winner_team_id || ''}
+                  onChange={(e) => onSave(g.game_number, { winner_team_id: e.target.value || null })}
+                >
+                  <option value="">— not played yet —</option>
+                  {sides.map((t) => <option key={t.id} value={t.id}>{t.name} won</option>)}
+                </select>
+              ) : (
+                <span className="text-[12.5px]">
+                  {g.winner_team_id
+                    ? `${sides.find((t) => t.id === g.winner_team_id)?.name || '—'} won`
+                    : <span className="text-ash">not played yet</span>}
+                </span>
+              )}
+
+              {g.scoreboard_at && (
+                <span className="text-[10px] uppercase tracking-[0.1em] text-verdigris">stats</span>
+              )}
+              {g.dead && (
+                <span className="text-[10px] uppercase tracking-[0.1em] text-ash" title="the series was already decided">
+                  did not count
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {series?.decided && (
+        <div className="px-4 py-2.5 border-t border-line text-[12.5px] text-verdigris">
+          Series decided — the bracket has advanced. Changing a game here will take that back.
+        </div>
+      )}
     </Panel>
   );
 }

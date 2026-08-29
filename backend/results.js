@@ -28,6 +28,7 @@ const {
   playerProfile, leaderboard, rank, SORTS, isSort,
 } = require('../shared/scoreboard.cjs');
 const { classify } = require('../shared/classes.cjs');
+const { seriesResult, gameSlots } = require('../shared/series.cjs');
 
 // In memory, not on disk: a scoreboard screenshot is read once and never needed
 // again, and writing it to the filesystem of whatever host this is on would be
@@ -60,7 +61,7 @@ async function inLanes(items, worker) {
   return out;
 }
 
-const STAT_COLS = 'id, match_id, signup_id, team_id, rank, weapon_1, weapon_2, guild_name, '
+const STAT_COLS = 'id, match_id, game_id, signup_id, team_id, rank, weapon_1, weapon_2, guild_name, '
   + 'player_name, team_color, kills, assists, damage_dealt, damage_taken, healing, created_at';
 
 const toInt = (v) => {
@@ -86,17 +87,31 @@ router.get('/match/:key', async (req, res) => {
   if (!t) return res.json({ match: null, rows: [] });
 
   const { data: match } = await supabase.from('matches')
-    .select('id, key, bracket, round, idx, team_a_id, team_b_id, winner_team_id, status, scoreboard_at')
+    .select('id, key, bracket, round, idx, best_of, team_a_id, team_b_id, winner_team_id, status, scoreboard_at')
     .eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
 
-  const [{ data: rows }, { data: teams }] = await Promise.all([
+  const [{ data: rows }, { data: teams }, { data: games }] = await Promise.all([
     supabase.from('player_match_stats').select(STAT_COLS)
       .eq('match_id', match.id).order('rank', { ascending: true }),
     supabase.from('teams').select('id, name, tag, seed').eq('tournament_id', t.id),
+    supabase.from('match_games')
+      .select('id, game_number, map, winner_team_id, scoreboard_at')
+      .eq('match_id', match.id).order('game_number', { ascending: true }),
   ]);
 
   const byId = new Map((teams || []).map((x) => [x.id, x]));
+  const byGame = new Map();
+  (rows || []).forEach((r) => {
+    const k = r.game_id || 'none';
+    if (!byGame.has(k)) byGame.set(k, []);
+    byGame.get(k).push({ ...r, class: classify(r.weapon_1, r.weapon_2) });
+  });
+
+  // Every game played, plus the next one if the series is still live — see
+  // shared/series.cjs. The page shows one tab per entry.
+  const slots = gameSlots(games || [], match.best_of, match.team_a_id, match.team_b_id);
+
   res.json({
     match: {
       ...match,
@@ -104,8 +119,28 @@ router.get('/match/:key', async (req, res) => {
       team_b: byId.get(match.team_b_id) || null,
       winner: byId.get(match.winner_team_id) || null,
     },
-    rows: (rows || []).map((r) => ({ ...r, class: classify(r.weapon_1, r.weapon_2) })),
+    series: seriesResult(games || [], match.best_of, match.team_a_id, match.team_b_id),
+    games: slots.map((g) => ({ ...g, rows: byGame.get(g.id) || [] })),
+    // Rows recorded before 013 split matches into games. Kept visible rather
+    // than orphaned into a tab that does not exist.
+    looseRows: byGame.get('none') || [],
   });
+});
+
+/** Maps already used in this tournament, so spelling converges without a list. */
+router.get('/maps', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.json({ maps: [] });
+
+  const { data } = await supabase.from('match_games')
+    .select('map').eq('tournament_id', t.id).not('map', 'is', null);
+  const seen = new Map();
+  (data || []).forEach((r) => {
+    const name = String(r.map || '').trim();
+    if (name) seen.set(name.toLowerCase(), name);
+  });
+  res.json({ maps: [...seen.values()].sort((a, b) => a.localeCompare(b)) });
 });
 
 /** The tournament leaderboard. */
@@ -345,6 +380,28 @@ organizerRouter.post('/commit/:key', async (req, res) => {
     .eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
 
+  // Which GAME of the series. A best-of-three has up to three scoreboards, and
+  // the unique index is on (game_id, signup_id) — committing without one would
+  // put every game's rows in the same bucket and refuse the second.
+  const gameNumber = Number(req.body?.game_number);
+  if (!Number.isInteger(gameNumber) || gameNumber < 1) {
+    return res.status(400).json({ error: 'Which game is this scoreboard for?' });
+  }
+
+  const { data: game, error: gErr } = await supabase.from('match_games')
+    .upsert({ tournament_id: t.id, match_id: match.id, game_number: gameNumber },
+      { onConflict: 'match_id,game_number' })
+    .select('id, game_number').single();
+  if (gErr || !game) {
+    console.error('game lookup failed:', gErr?.message);
+    if (/schema cache|does not exist|relation/i.test(gErr?.message || '')) {
+      return res.status(503).json({
+        error: 'The games table is missing — run migrations/013_games.sql in the Supabase SQL editor.',
+      });
+    }
+    return res.status(500).json({ error: 'Could not find that game.' });
+  }
+
   const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
   if (!rows) return res.status(400).json({ error: 'Send the reviewed rows.' });
   if (rows.length === 0) return res.status(400).json({ error: 'There are no rows to save.' });
@@ -367,6 +424,7 @@ organizerRouter.post('/commit/:key', async (req, res) => {
   const clean = rows.map((r) => ({
     tournament_id: t.id,
     match_id: match.id,
+    game_id: game.id,
     signup_id: r.signup_id || null,
     team_id: r.team_id || null,
     rank: Number.isFinite(Number(r.rank)) ? Math.trunc(Number(r.rank)) : null,
@@ -387,7 +445,7 @@ organizerRouter.post('/commit/:key', async (req, res) => {
   }
 
   const { error: delErr } = await supabase.from('player_match_stats')
-    .delete().eq('match_id', match.id);
+    .delete().eq('game_id', game.id);
   if (delErr) {
     console.error('scoreboard clear failed:', delErr.message);
     return res.status(500).json({ error: 'Could not clear the old scoreboard.' });
@@ -396,7 +454,7 @@ organizerRouter.post('/commit/:key', async (req, res) => {
   const { error: insErr } = await supabase.from('player_match_stats').insert(clean);
   if (insErr) {
     console.error('scoreboard insert failed:', insErr.message);
-    if (/pms_one_row_per_player_per_match/.test(`${insErr.message} ${insErr.details}`)) {
+    if (/pms_one_row_per_player_per_game/.test(`${insErr.message} ${insErr.details}`)) {
       return res.status(409).json({ error: 'Two rows are matched to the same player.' });
     }
     return res.status(500).json({
@@ -404,12 +462,14 @@ organizerRouter.post('/commit/:key', async (req, res) => {
     });
   }
 
-  await supabase.from('matches')
-    .update({ scoreboard_at: new Date().toISOString() })
-    .eq('id', match.id);
+  const now = new Date().toISOString();
+  await supabase.from('match_games').update({ scoreboard_at: now }).eq('id', game.id);
+  // On the match too, so the bracket card can show a stats badge without
+  // counting rows in another table for every match on screen.
+  await supabase.from('matches').update({ scoreboard_at: now }).eq('id', match.id);
 
   const summary = linkSummary(clean);
-  await audit(req.user, 'scoreboard.commit', match.key, summary);
+  await audit(req.user, 'scoreboard.commit', `${match.key} g${game.game_number}`, summary);
   res.json({ ok: true, ...summary });
 });
 
@@ -422,11 +482,24 @@ organizerRouter.delete('/match/:key', async (req, res) => {
     .select('id, key').eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
 
-  const { error } = await supabase.from('player_match_stats').delete().eq('match_id', match.id);
+  const gameNumber = Number(req.query.game || req.body?.game_number);
+  const { data: game } = await supabase.from('match_games')
+    .select('id').eq('match_id', match.id).eq('game_number', gameNumber).maybeSingle();
+  if (!game) return res.status(404).json({ error: 'No such game.' });
+
+  const { error } = await supabase.from('player_match_stats').delete().eq('game_id', game.id);
   if (error) return res.status(500).json({ error: 'Could not clear that scoreboard.' });
 
-  await supabase.from('matches').update({ scoreboard_at: null }).eq('id', match.id);
-  await audit(req.user, 'scoreboard.clear', match.key, null);
+  await supabase.from('match_games').update({ scoreboard_at: null }).eq('id', game.id);
+
+  // The match keeps its badge only while SOME game still has a scoreboard.
+  const { count } = await supabase.from('player_match_stats')
+    .select('id', { count: 'exact', head: true }).eq('match_id', match.id);
+  await supabase.from('matches')
+    .update({ scoreboard_at: count ? new Date().toISOString() : null })
+    .eq('id', match.id);
+
+  await audit(req.user, 'scoreboard.clear', `${match.key} g${gameNumber}`, null);
   res.json({ ok: true });
 });
 

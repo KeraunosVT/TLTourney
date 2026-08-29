@@ -10,10 +10,11 @@
 const express = require('express');
 const { supabase, currentTournament, audit } = require('./db');
 const { generateBracket, applyResult, roundLabel } = require('../shared/bracket.cjs');
+const { seriesResult, gameSlots, isBestOf } = require('../shared/series.cjs');
 
 const COLS = 'id, key, bracket, round, idx, slot_a, slot_b, team_a_id, team_b_id, '
   + 'winner_team_id, loser_team_id, kind, advances, status, is_reset, scheduled_at, '
-  + 'decided_at, decided_by, scoreboard_at';
+  + 'decided_at, decided_by, scoreboard_at, best_of';
 
 const TEAM = 'id, name, tag, seed';
 
@@ -35,6 +36,21 @@ const fromEngine = (m, tournamentId) => ({
   advances: m.advances || null,
   is_reset: !!m.reset,
 });
+
+const GAME = 'id, match_id, game_number, map, winner_team_id, scoreboard_at, decided_at, decided_by';
+
+async function readGames(tournamentId) {
+  const { data, error } = await supabase
+    .from('match_games').select(GAME).eq('tournament_id', tournamentId)
+    .order('game_number', { ascending: true });
+  if (error) throw new Error(`games read failed: ${error.message}`);
+  const byMatch = new Map();
+  (data || []).forEach((g) => {
+    if (!byMatch.has(g.match_id)) byMatch.set(g.match_id, []);
+    byMatch.get(g.match_id).push(g);
+  });
+  return byMatch;
+}
 
 async function readMatches(tournamentId) {
   const { data, error } = await supabase
@@ -115,10 +131,11 @@ async function settle(tournamentId) {
 
 // ── Reading it ──────────────────────────────────────────────────────────────
 async function bracketState(tournamentId) {
-  const [rows, teamsRes] = await Promise.all([
+  const [rows, teamsRes, gamesByMatch] = await Promise.all([
     readMatches(tournamentId),
     supabase.from('teams').select(TEAM).eq('tournament_id', tournamentId)
       .order('seed', { ascending: true, nullsFirst: false }),
+    readGames(tournamentId),
   ]);
   if (teamsRes.error) throw new Error(`bracket teams read failed: ${teamsRes.error.message}`);
 
@@ -133,13 +150,18 @@ async function bracketState(tournamentId) {
     // arithmetic stays whole; showing an empty box on a bracket is worse than
     // showing nothing.
     .filter((r) => r.kind !== 'void')
-    .map((r) => ({
-      ...r,
-      label: roundLabel(r, { winnersRounds, losersRounds }),
-      team_a: byId.get(r.team_a_id) || null,
-      team_b: byId.get(r.team_b_id) || null,
-      winner: byId.get(r.winner_team_id) || null,
-    }));
+    .map((r) => {
+      const games = gamesByMatch.get(r.id) || [];
+      return {
+        ...r,
+        label: roundLabel(r, { winnersRounds, losersRounds }),
+        team_a: byId.get(r.team_a_id) || null,
+        team_b: byId.get(r.team_b_id) || null,
+        winner: byId.get(r.winner_team_id) || null,
+        games,
+        series: seriesResult(games, r.best_of, r.team_a_id, r.team_b_id),
+      };
+    });
 
   const gf1 = rows.find((r) => r.bracket === 'GF' && r.round === 1);
   const gf2 = rows.find((r) => r.bracket === 'GF' && r.round === 2);
@@ -292,10 +314,240 @@ organizerRouter.post('/generate', async (req, res) => {
 });
 
 /**
- * Record a result.
+ * Clear a match's result and everything downstream of it.
  *
- * The winner is stated explicitly and is never inferred. Later, when scoreboards
- * are read from screenshots, the colours on the image are a suggestion — a
+ * Shared by undo and by a game being edited so the series is no longer decided.
+ * A team that advanced on this result may already be written into two more
+ * slots, so the whole subtree is cleared rather than tracked.
+ */
+async function unwind(tournamentId, rows, key) {
+  const downstream = new Set([key]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    rows.forEach((r) => {
+      if (downstream.has(r.key)) return;
+      if (['slot_a', 'slot_b'].some((sl) => r[sl]?.of && downstream.has(r[sl].of))) {
+        downstream.add(r.key);
+        grew = true;
+      }
+    });
+  }
+
+  for (const k of downstream) {
+    const isSelf = k === key;
+    const { error } = await supabase.from('matches').update({
+      winner_team_id: null, loser_team_id: null, status: 'pending',
+      decided_at: null, decided_by: null,
+      // The match itself keeps its teams; everything after it loses them,
+      // because those teams only got there because of the result being undone.
+      ...(isSelf ? {} : { team_a_id: null, team_b_id: null }),
+    }).eq('tournament_id', tournamentId).eq('key', k);
+    if (error) throw new Error(`unwind failed at ${k}: ${error.message}`);
+  }
+  return downstream;
+}
+
+/**
+ * Bring a match's result into line with the games recorded under it.
+ *
+ * The only thing that decides a bracket match now. Called after any change to a
+ * game, and self-correcting in all three directions:
+ *
+ *   not decided -> decided         record the winner and advance
+ *   decided -> not decided         a game was edited or removed; clear the
+ *                                  result and everything downstream
+ *   decided -> a DIFFERENT winner  an organizer fixed a wrong game; unwind,
+ *                                  then advance the other way
+ *
+ * Written as "make the bracket agree with the games" rather than "apply this
+ * game" because the second only works forwards. Correcting game 1 of a finished
+ * series is an ordinary thing to do, and it has to un-advance a team that is
+ * already two rounds along.
+ */
+async function recompute(t, key, actor) {
+  const rows = await readMatches(t.id);
+  const match = rows.find((r) => r.key === key);
+  if (!match) return { error: 'No such match.', code: 404 };
+
+  const gamesByMatch = await readGames(t.id);
+  const games = gamesByMatch.get(match.id) || [];
+  const series = seriesResult(games, match.best_of, match.team_a_id, match.team_b_id);
+
+  const recorded = match.winner_team_id || null;
+  const should = series.decided ? series.winnerId : null;
+  if (recorded === should) return { series, changed: false };
+
+  // Anything already recorded comes off first — including when the winner
+  // merely CHANGED, because the old winner is sitting in a later slot.
+  if (recorded) {
+    try {
+      await unwind(t.id, rows, key);
+    } catch (err) {
+      console.error(err.message);
+      return { error: 'The bracket is half-undone — reload it.', code: 500 };
+    }
+  }
+
+  if (!should) {
+    await settle(t.id);
+    return { series, changed: true, cleared: true };
+  }
+
+  const fresh = await readMatches(t.id);
+  const result = applyResult(fresh.map(toEngine), key, should);
+  if (result.error) return { error: result.error, code: 409 };
+
+  const { error: mErr } = await supabase.from('matches').update({
+    winner_team_id: result.winnerId,
+    loser_team_id: result.loserId,
+    status: 'complete',
+    decided_at: new Date().toISOString(),
+    decided_by: actor || null,
+  }).eq('tournament_id', t.id).eq('key', key);
+  if (mErr) {
+    console.error('series result write failed:', mErr.message);
+    return { error: 'Could not record that result.', code: 500 };
+  }
+
+  for (const w of result.writes) {
+    const { error } = await supabase.from('matches')
+      .update({ [`team_${w.slot}_id`]: w.teamId })
+      .eq('tournament_id', t.id).eq('key', w.key);
+    if (error) {
+      console.error('advance failed:', error.message);
+      return { error: 'The result was recorded but the teams did not advance — reload.', code: 500 };
+    }
+  }
+
+  await settle(t.id);
+  return { series, changed: true, result };
+}
+
+/**
+ * Record a game: its map, its winner, or both.
+ *
+ * The map saves on its own, before the game is played — that is the order
+ * things actually happen in, and a form that demanded a winner before it would
+ * accept a map would have people writing the map down somewhere else.
+ */
+organizerRouter.post('/game', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const key = String(req.body?.key || '');
+  const number = Number(req.body?.game_number);
+  if (!key || !Number.isInteger(number) || number < 1 || number > 9) {
+    return res.status(400).json({ error: 'Send the match and a game number.' });
+  }
+
+  const { data: match } = await supabase.from('matches')
+    .select('id, key, best_of, team_a_id, team_b_id')
+    .eq('tournament_id', t.id).eq('key', key).maybeSingle();
+  if (!match) return res.status(404).json({ error: 'No such match.' });
+  if (!match.team_a_id || !match.team_b_id) {
+    return res.status(409).json({ error: 'Both teams have to be decided before games can be recorded.' });
+  }
+  if (number > match.best_of) {
+    return res.status(400).json({ error: `This match is best of ${match.best_of}.` });
+  }
+
+  const winner = req.body?.winner_team_id ?? undefined;
+  if (winner !== undefined && winner !== null
+      && ![match.team_a_id, match.team_b_id].includes(winner)) {
+    return res.status(400).json({ error: 'That team is not in this match.' });
+  }
+
+  const patch = { tournament_id: t.id, match_id: match.id, game_number: number };
+  if (req.body?.map !== undefined) patch.map = String(req.body.map).trim().slice(0, 60) || null;
+  if (winner !== undefined) {
+    patch.winner_team_id = winner || null;
+    patch.decided_at = winner ? new Date().toISOString() : null;
+    patch.decided_by = winner ? (req.user?.username || null) : null;
+  }
+
+  const { error } = await supabase.from('match_games')
+    .upsert(patch, { onConflict: 'match_id,game_number' });
+  if (error) {
+    console.error('game save failed:', error.message);
+    if (/schema cache|does not exist|relation/i.test(error.message)) {
+      return res.status(503).json({
+        error: 'The games table is missing — run migrations/013_games.sql in the Supabase SQL editor.',
+      });
+    }
+    return res.status(500).json({ error: 'Could not save that game.' });
+  }
+
+  const out = await recompute(t, key, req.user?.username);
+  if (out.error) return res.status(out.code || 500).json({ error: out.error });
+
+  await audit(req.user, 'bracket.game', key, {
+    game: number, map: patch.map, winner: patch.winner_team_id,
+    series: out.series ? `${out.series.winsA}-${out.series.winsB}` : null,
+  });
+
+  res.json({ ok: true, series: out.series, ...(await bracketState(t.id)) });
+});
+
+organizerRouter.delete('/game', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const key = String(req.body?.key || '');
+  const number = Number(req.body?.game_number);
+  const { data: match } = await supabase.from('matches')
+    .select('id').eq('tournament_id', t.id).eq('key', key).maybeSingle();
+  if (!match) return res.status(404).json({ error: 'No such match.' });
+
+  const { error } = await supabase.from('match_games').delete()
+    .eq('match_id', match.id).eq('game_number', number);
+  if (error) return res.status(500).json({ error: 'Could not remove that game.' });
+
+  const out = await recompute(t, key, req.user?.username);
+  if (out.error) return res.status(out.code || 500).json({ error: out.error });
+
+  await audit(req.user, 'bracket.game.remove', key, { game: number });
+  res.json({ ok: true, ...(await bracketState(t.id)) });
+});
+
+/** How long this series is. A grand final is often longer than the rounds. */
+organizerRouter.put('/best-of', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const bestOf = Number(req.body?.best_of);
+  if (!isBestOf(bestOf)) {
+    return res.status(400).json({
+      error: 'A series is an odd number of games, 1 to 9 — an even one can be drawn.',
+    });
+  }
+
+  const key = String(req.body?.key || '');
+  const { error } = await supabase.from('matches').update({ best_of: bestOf })
+    .eq('tournament_id', t.id).eq('key', key);
+  if (error) return res.status(500).json({ error: 'Could not change that.' });
+
+  // Shortening a series can decide one that was not, and lengthening can
+  // un-decide one that was.
+  const out = await recompute(t, key, req.user?.username);
+  if (out.error) return res.status(out.code || 500).json({ error: out.error });
+
+  await audit(req.user, 'bracket.best_of', key, { best_of: bestOf });
+  res.json({ ok: true, ...(await bracketState(t.id)) });
+});
+
+/**
+ * Record a result directly, with no games.
+ *
+ * Kept for the cases that have none to record: a forfeit, a disqualification, a
+ * team that never turned up. It writes a one-game series underneath so the
+ * bracket and the games never disagree about what happened.
+ *
+ * The winner is stated explicitly and is never inferred. When scoreboards are
+ * read from screenshots the colours on the image are a suggestion — a
  * tournament result decided by an OCR pass on a team colour is a result nobody
  * can defend.
  */
@@ -308,77 +560,53 @@ organizerRouter.post('/result', async (req, res) => {
   const winnerId = req.body?.winner_team_id;
   if (!key || !winnerId) return res.status(400).json({ error: 'Send the match and the winning team.' });
 
-  let rows;
-  try {
-    rows = await readMatches(t.id);
-  } catch (err) {
-    return res.status(500).json({ error: 'Could not read the bracket.' });
+  const { data: match } = await supabase.from('matches')
+    .select('id, key, best_of, team_a_id, team_b_id, status')
+    .eq('tournament_id', t.id).eq('key', key).maybeSingle();
+  if (!match) return res.status(404).json({ error: 'No such match in this bracket.' });
+  if (match.status === 'complete') {
+    return res.status(409).json({ error: 'That match already has a result — undo it first to change it.' });
+  }
+  if (![match.team_a_id, match.team_b_id].includes(winnerId)) {
+    return res.status(400).json({ error: 'That team is not in this match.' });
   }
 
-  const row = rows.find((r) => r.key === key);
-  if (!row) return res.status(404).json({ error: 'No such match in this bracket.' });
-  if (row.status === 'complete') {
-    return res.status(409).json({ error: 'That match already has a result — clear it first to change it.' });
-  }
-
-  const result = applyResult(rows.map(toEngine), key, winnerId);
-  if (result.error) return res.status(409).json({ error: result.error });
-
-  // The match itself first. If the writes below fail, a recorded result with
-  // an un-advanced team is recoverable by re-running settle; an advanced team
-  // with no recorded result is a bracket nobody can explain.
-  const { error: mErr } = await supabase.from('matches').update({
-    winner_team_id: result.winnerId,
-    loser_team_id: result.loserId,
-    status: 'complete',
+  // Written as GAMES rather than straight onto the match, because the series is
+  // now the thing that decides a match and a winner recorded around it would be
+  // a bracket that disagrees with its own scoresheet. A forfeit is the whole
+  // series conceded, so it is exactly the games it takes to win one, with no
+  // map on any of them — nothing was played.
+  const { toWin } = require('../shared/series.cjs');
+  const need = toWin(match.best_of);
+  const games = Array.from({ length: need }, (_, i) => ({
+    tournament_id: t.id,
+    match_id: match.id,
+    game_number: i + 1,
+    winner_team_id: winnerId,
     decided_at: new Date().toISOString(),
-    decided_by: req.user?.username || null,
-  }).eq('tournament_id', t.id).eq('key', key);
-  if (mErr) {
-    console.error('result write failed:', mErr.message);
+    decided_by: `${req.user?.username || 'organizer'} (awarded)`,
+  }));
+
+  const { error } = await supabase.from('match_games')
+    .upsert(games, { onConflict: 'match_id,game_number' });
+  if (error) {
+    console.error('awarded result write failed:', error.message);
     return res.status(500).json({ error: 'Could not record that result.' });
   }
 
-  for (const w of result.writes) {
-    const { error } = await supabase.from('matches')
-      .update({ [`team_${w.slot}_id`]: w.teamId })
-      .eq('tournament_id', t.id).eq('key', w.key);
-    if (error) {
-      console.error('advance failed:', error.message);
-      return res.status(500).json({
-        error: 'The result was recorded but the teams did not advance — reload the bracket.',
-      });
-    }
-  }
+  const out = await recompute(t, key, req.user?.username);
+  if (out.error) return res.status(out.code || 500).json({ error: out.error });
 
-  try {
-    await settle(t.id);
-  } catch (err) {
-    console.error(err.message);
-  }
-
-  await audit(req.user, 'bracket.result', key, {
-    winner: result.winnerId, loser: result.loserId,
-    eliminated: result.eliminated, reset: result.reset, champion: result.champion,
-  });
-
+  await audit(req.user, 'bracket.result', key, { winner: winnerId, awarded: true, games: need });
   res.json({
     ok: true,
-    reset: result.reset,
-    champion: result.champion,
-    eliminated: result.eliminated,
+    reset: out.result?.reset,
+    champion: out.result?.champion,
+    eliminated: out.result?.eliminated,
     ...(await bracketState(t.id)),
   });
 });
 
-/**
- * Take back the most recent result.
- *
- * Undoing one match means unwinding everything downstream of it, because a team
- * that advanced on this result may already have been written into two more
- * slots. Rather than tracking that, the bracket is rebuilt: clear every result
- * from this match onwards by decision time, then re-seed and re-settle.
- */
 organizerRouter.post('/undo', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
   const t = await currentTournament();
@@ -426,6 +654,12 @@ organizerRouter.post('/undo', async (req, res) => {
   } catch (err) {
     console.error(err.message);
   }
+
+  // The games as well. A match whose result is cleared while its games still
+  // say 2-0 is a match that the very next recompute would decide all over
+  // again — undo would appear to do nothing.
+  const { error: gErr } = await supabase.from('match_games').delete().eq('match_id', last.id);
+  if (gErr) console.warn(`undo left games behind on ${last.key}: ${gErr.message}`);
 
   await audit(req.user, 'bracket.undo', last.key, { winner: last.winner_team_id, cleared: downstream.size });
   res.json({ ok: true, undone: last.key, cleared: downstream.size, ...(await bracketState(t.id)) });
