@@ -194,13 +194,23 @@ const okCall = (r, what) => {
       const m = state.matches.find((x) => x.status === 'ready');
       if (!m) { ok(false, 'nothing is playable and nobody has won'); break; }
 
-      // Seed order decides, so results are reproducible: the team with the
-      // lower seed wins, except in the losers bracket, to force a reset.
+      // Seed order decides, so a run is reproducible: the lower seed wins,
+      // reversed in the losers bracket so the two finalists came by different
+      // routes.
+      //
+      // EXCEPT the first grand final, which is handed to slot B — the side that
+      // came through the losers bracket. That is what forces the RESET, and
+      // until this line the mock never played one: fourteen matches for eight
+      // teams is 2n-2 exactly, so the most distinctive match in the format had
+      // never once run against a database.
       const teamA = state.teams.find((x) => x.id === m.team_a_id);
       const teamB = state.teams.find((x) => x.id === m.team_b_id);
-      const winner = m.bracket === 'L'
-        ? (teamA.seed > teamB.seed ? teamA : teamB)
-        : (teamA.seed < teamB.seed ? teamA : teamB);
+      const forceReset = m.bracket === 'GF' && m.round === 1;
+      const winner = forceReset
+        ? teamB
+        : m.bracket === 'L'
+          ? (teamA.seed > teamB.seed ? teamA : teamB)
+          : (teamA.seed < teamB.seed ? teamA : teamB);
       const loser = winner.id === teamA.id ? teamB : teamA;
 
       const avail = m.maps_available || MAPS;
@@ -217,6 +227,19 @@ const okCall = (r, what) => {
 
     ok(!!champion, champion ? `champion decided after ${played} matches` : 'no champion');
 
+    // The reset, checked explicitly. A bracket that quietly skips it hands the
+    // title to a team that lost once while the other lost twice — which is the
+    // whole thing double elimination promises not to do.
+    const afterGF = okCall(await call(bracket.organizerRouter, 'GET', '/'), 'read');
+    const gf1 = afterGF.matches.find((m) => m.bracket === 'GF' && m.round === 1);
+    const gf2 = afterGF.matches.find((m) => m.bracket === 'GF' && m.round === 2);
+    ok(gf1?.status === 'complete' && gf1.winner_team_id === gf1.team_b_id,
+      'the losers-bracket team won the first grand final');
+    ok(gf2?.status === 'complete', 'so the RESET was played');
+    ok(played === 2 * inBracket - 1,
+      `${played} matches — 2n-1, because the reset is the extra one`);
+    ok(afterGF.champion?.id === gf2?.winner_team_id, 'and the reset decided the champion');
+
     // THE property. Everything else can be wrong in ways that still produce a
     // champion; this cannot.
     const drawn2 = okCall(await call(bracket.organizerRouter, 'GET', '/'), 'read');
@@ -224,6 +247,9 @@ const okCall = (r, what) => {
     const wrong = allTeams.filter((id) => id !== champion && (losses[id] || 0) !== 2);
     ok(wrong.length === 0,
       `every non-champion lost exactly twice (${allTeams.map((id) => losses[id] || 0).join(', ')})`);
+    // The champion may carry one loss, and after a reset usually does — they
+    // came through the losers bracket. Two would mean they were eliminated.
+    ok((losses[champion] || 0) <= 1, `the champion lost ${losses[champion] || 0} time(s), not more`);
 
     const finished = okCall(await call(bracket.organizerRouter, 'GET', '/'), 'read');
     ok(finished.counts.complete === finished.counts.total,

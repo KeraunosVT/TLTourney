@@ -20,6 +20,21 @@ const COLS = 'id, key, bracket, round, idx, slot_a, slot_b, team_a_id, team_b_id
 
 const TEAM = 'id, name, tag, seed';
 
+// One read however many people are watching, the same trick the draft's stream
+// route uses and for the same reason: every browser on the broadcast polls this,
+// and they all want bytes that are identical. Short, because the poll is ten
+// seconds and a bracket that just changed should not sit stale behind a cache.
+//
+// The PROMISE is cached, so a burst of viewers arriving together collapses into
+// one query rather than one each.
+const CAST_MS = 3000;
+let castCache = null;
+
+// Declared up here rather than beside the route that reads it, because settle()
+// clears it and settle() is defined further up the file. `let` in a temporal
+// dead zone is only safe while nothing runs during module evaluation, which is
+// true today and is not a thing to leave depending on reading order.
+
 // The DB row and the pure function speak slightly different dialects: the
 // engine wants `a`/`b` for the slot sources, the table stores them as
 // slot_a/slot_b so the columns say what they are. Converted in one place each
@@ -77,6 +92,10 @@ async function readMatches(tournamentId) {
  * Returns the number of rows it changed.
  */
 async function settle(tournamentId) {
+  // Anything that settles has changed the bracket, so the broadcast's cached
+  // copy is stale. Cleared here rather than at each of the six write routes,
+  // because every one of them settles.
+  castCache = null;
   let rows = await readMatches(tournamentId);
   let written = 0;
 
@@ -255,7 +274,10 @@ streamRouter.get('/', async (req, res) => {
   if (!t) return res.json({ exists: false, matches: [], teams: [] });
 
   try {
-    const state = await bracketState(t.id);
+    if (!castCache || castCache.id !== t.id || Date.now() - castCache.at > CAST_MS) {
+      castCache = { id: t.id, at: Date.now(), job: bracketState(t.id) };
+    }
+    const state = await castCache.job;
     const focus = featured(state.matches, String(req.query.match || ''));
 
     let rows = [];
