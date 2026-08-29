@@ -608,6 +608,46 @@ organizerRouter.put('/bans', async (req, res) => {
   });
 });
 
+/**
+ * When this match is played.
+ *
+ * A plain instant, sent as ISO from a browser that read it off a local
+ * datetime picker. Stored as timestamptz so every reader renders it in their
+ * own zone — a tournament spread across a continent cannot agree on "8pm".
+ *
+ * Null clears it. A match with no time is the normal state for most of a
+ * bracket: the losers-bracket round 4 fixture does not have a time until the
+ * teams in it are known.
+ */
+organizerRouter.put('/schedule', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const key = String(req.body?.key || '');
+  const raw = req.body?.scheduled_at;
+
+  let when = null;
+  if (raw) {
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return res.status(400).json({ error: 'That is not a date.' });
+    when = d.toISOString();
+  }
+
+  const { data, error } = await supabase.from('matches')
+    .update({ scheduled_at: when })
+    .eq('tournament_id', t.id).eq('key', key)
+    .select('key').maybeSingle();
+  if (error) {
+    console.error('schedule write failed:', error.message);
+    return res.status(500).json({ error: 'Could not save that time.' });
+  }
+  if (!data) return res.status(404).json({ error: 'No such match.' });
+
+  await audit(req.user, 'bracket.schedule', key, { scheduled_at: when });
+  res.json({ ok: true, ...(await bracketState(t.id)) });
+});
+
 /** How long this series is. A grand final is often longer than the rounds. */
 organizerRouter.put('/best-of', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import api, { errorMessage, fieldErrors } from '../api';
+import { whenLocal } from '../lib/clock';
 import { useAuth } from '../auth';
 import { CLASS_NAMES, weaponsLabel } from '@shared/classes.cjs';
 import { ROLES, POSITIONS } from '@shared/roles.cjs';
@@ -23,22 +24,6 @@ const STATUS_PILL = {
   rejected: ['bad', 'Not accepted'],
   withdrawn: ['quiet', 'Withdrawn'],
 };
-
-/**
- * A deadline, in the reader's timezone and their locale.
- *
- * The timezone is named explicitly. "Closes Friday 9:00pm" is ambiguous across
- * a tournament whose players are spread over a continent, and the ambiguity is
- * only discovered by the person who turns up an hour late.
- */
-function whenLocal(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return 'soon';
-  return d.toLocaleString(undefined, {
-    weekday: 'short', month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-  });
-}
 
 export default function Signup() {
   const { user } = useAuth();

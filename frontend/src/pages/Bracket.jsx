@@ -14,6 +14,7 @@ import { Link } from 'react-router-dom';
 import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Note, Field } from '../components/ui';
 import { useAuth } from '../auth';
+import { whenShort } from '../lib/clock';
 
 export default function Bracket() {
   const { user } = useAuth();
@@ -183,6 +184,12 @@ function MatchCard({ m, onPick, canRecord, busy }) {
         )}
         {m.best_of > 1 && m.status !== 'complete' && m.series?.played === 0 && (
           <span className="text-[9px] uppercase tracking-[0.1em] text-dim">bo{m.best_of}</span>
+        )}
+        {/* Short and without a zone: the card has no room, and a bracket full
+            of "EDT" repeated forty times is noise. The match page says it in
+            full. */}
+        {m.scheduled_at && m.status !== 'complete' && (
+          <span className="text-[9.5px] text-ash whitespace-nowrap">{whenShort(m.scheduled_at)}</span>
         )}
         {m.kind === 'walkover' && <span className="text-[9px] uppercase tracking-[0.1em] text-ash">bye</span>}
         {m.status === 'ready' && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">ready</span>}

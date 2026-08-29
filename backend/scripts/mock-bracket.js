@@ -270,6 +270,29 @@ const okCall = (r, what) => {
     ok(restored.matches.find((m) => m.key === target.key).winner_team_id === oldWinner,
       'restoring the game re-decides the match');
 
+    // ── Scheduling ──────────────────────────────────────────────────────────
+    step('Scheduling a match');
+    const toSchedule = restored.matches.find((m) => m.kind === 'match');
+    const when = new Date(Date.now() + 3 * 86400e3);
+    when.setSeconds(0, 0);
+
+    const scheduled = okCall(await call(bracket.organizerRouter, 'PUT', '/schedule',
+      { body: { key: toSchedule.key, scheduled_at: when.toISOString() } }), 'schedule');
+    const withTime = scheduled.matches.find((m) => m.key === toSchedule.key);
+    ok(new Date(withTime.scheduled_at).getTime() === when.getTime(),
+      `${toSchedule.key} scheduled, and the instant survives the round trip`);
+
+    const badTime = await call(bracket.organizerRouter, 'PUT', '/schedule',
+      { body: { key: toSchedule.key, scheduled_at: 'next tuesday' } });
+    ok(badTime.status === 400, 'an unparseable time is refused rather than stored as null');
+
+    const cleared = okCall(await call(bracket.organizerRouter, 'PUT', '/schedule',
+      { body: { key: toSchedule.key, scheduled_at: null } }), 'clear schedule');
+    ok(!cleared.matches.find((m) => m.key === toSchedule.key).scheduled_at, 'and it clears');
+
+    okCall(await call(bracket.organizerRouter, 'PUT', '/schedule',
+      { body: { key: toSchedule.key, scheduled_at: when.toISOString() } }), 're-schedule');
+
     // ── A scoreboard ────────────────────────────────────────────────────────
     step('Committing a scoreboard');
     const scored = restored.matches.find((m) => m.status === 'complete' && m.games?.length);

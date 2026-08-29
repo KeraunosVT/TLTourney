@@ -51,6 +51,59 @@ export function mmss(seconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// ── Wall-clock times ────────────────────────────────────────────────────────
+// Everything the app stores is an instant (timestamptz). Everything a person
+// reads is a wall clock in THEIR timezone, with the zone named — a tournament
+// spread across a continent argues about "8pm" otherwise, and only finds out
+// who was right when somebody turns up an hour late.
+//
+// These lived in three pages before this. Three copies of a date formatter is
+// three chances for one of them to quietly drop the timezone.
+
+/** An instant, in the reader's own time. */
+export function whenLocal(iso) {
+  if (!iso) return 'not set';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'an invalid date';
+  return d.toLocaleString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  });
+}
+
+/** The same, short enough for a bracket card. No zone — the page says it once. */
+export function whenShort(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+/**
+ * An instant → the value a `datetime-local` input wants.
+ *
+ * Deliberately NOT toISOString().slice(0,16), which is the obvious one-liner
+ * and is wrong: that is UTC, so the input would show a time hours away from
+ * the one that was set. Built from the local getters instead.
+ */
+export function toLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** And back. A `datetime-local` value is local wall-clock; Date reads it as such. */
+export function fromLocalInput(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 /** 55680 → "15h 28m". For a draft length nobody wants read out in seconds. */
 export function humanDuration(seconds) {
   if (!seconds) return '—';

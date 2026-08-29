@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { errorMessage } from '../api';
 import { weaponsLabel } from '@shared/classes.cjs';
 import { Panel, Pill, Button, Empty, Note } from '../components/ui';
+import { whenLocal, toLocalInput, fromLocalInput } from '../lib/clock';
 
 // The full names are long enough to force a horizontal scrollbar on the queue,
 // and an organizer reading down the column already knows what they mean.
@@ -342,24 +343,6 @@ export default function Queue() {
 // The value travels as UTC. `datetime-local` gives local wall-clock time,
 // `new Date()` reads it as local, and toISOString converts — so the column
 // stores an instant and every reader renders it in their own time.
-function whenLocal(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return 'an invalid date';
-  return d.toLocaleString(undefined, {
-    weekday: 'short', month: 'short', day: 'numeric',
-    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-  });
-}
-
-function toLocalInput(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-    + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 function Deadline({ tournament, onSave }) {
   const [value, setValue] = useState(toLocalInput(tournament?.signups_close_at));
   const [busy, setBusy] = useState(false);
@@ -403,7 +386,7 @@ function Deadline({ tournament, onSave }) {
           <Button
             variant="primary"
             disabled={busy || !valid || !changed}
-            onClick={() => save(parsed.toISOString())}
+            onClick={() => save(fromLocalInput(value))}
           >
             {busy ? 'Saving…' : 'Set deadline'}
           </Button>

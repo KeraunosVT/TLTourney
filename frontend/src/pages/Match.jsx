@@ -15,6 +15,7 @@ import { Panel, Pill, Button, Note, Empty } from '../components/ui';
 import { useAuth } from '../auth';
 import { CLASS_NAMES, WEAPONS_FOR, classify, weaponsLabel } from '@shared/classes.cjs';
 import { applySides, candidatesFor } from '@shared/scoreboard.cjs';
+import { whenLocal, toLocalInput, fromLocalInput } from '../lib/clock';
 
 // 3254684 → "3.25M". A scoreboard is a wall of seven-digit numbers, and nobody
 // reads them digit by digit — they compare them.
@@ -122,6 +123,20 @@ export default function Match() {
     }
   }
 
+  async function saveSchedule(iso) {
+    setBanner(null);
+    try {
+      await api.put('/api/organizer/bracket/schedule', { key, scheduled_at: iso });
+      setBanner({
+        tone: 'good',
+        text: iso ? `Scheduled for ${whenLocal(iso)}.` : 'Time cleared.',
+      });
+      load();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+    }
+  }
+
   async function saveBans(fields) {
     setBanner(null);
     try {
@@ -190,7 +205,10 @@ export default function Match() {
           <h1 className="font-display text-[27px] mt-1">
             {m.team_a?.name || 'TBD'} <span className="text-ash text-[19px]">vs</span> {m.team_b?.name || 'TBD'}
           </h1>
-          <p className="text-ash text-sm mt-1 mono">{m.key}</p>
+          <p className="text-ash text-sm mt-1">
+            <span className="mono">{m.key}</span>
+            {m.scheduled_at && <span className="ml-2.5">{whenLocal(m.scheduled_at)}</span>}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {m.winner && <Pill tone="good">{m.winner.name} won</Pill>}
@@ -201,6 +219,8 @@ export default function Match() {
       </header>
 
       {banner && <div className="mb-4 max-w-[900px]"><Note tone={banner.tone}>{banner.text}</Note></div>}
+
+      {canEdit && <Schedule match={m} onSave={saveSchedule} />}
 
       <Bans match={m} available={data.mapsAvailable || []} canEdit={canEdit} onSave={saveBans} />
 
@@ -807,6 +827,55 @@ function Bans({ match, available, canEdit, onSave }) {
             );
           })}
         </div>
+      </div>
+    </Panel>
+  );
+}
+
+
+// ── When it is played ───────────────────────────────────────────────────────
+// Set in the organizer's own timezone and echoed back with the zone named, the
+// same way the signup deadline is — for the same reason, which is that a
+// tournament spread across a continent cannot agree on what "8pm" means until
+// somebody writes down which 8pm.
+//
+// Most matches have no time and should not. A losers-bracket round 4 fixture
+// has no date until the teams in it exist, and a blank field is the honest
+// representation of that.
+function Schedule({ match, onSave }) {
+  const [value, setValue] = useState(toLocalInput(match.scheduled_at));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { setValue(toLocalInput(match.scheduled_at)); }, [match.scheduled_at]);
+
+  const changed = value !== toLocalInput(match.scheduled_at);
+  const iso = fromLocalInput(value);
+
+  async function save(next) {
+    setBusy(true);
+    try { await onSave(next); } finally { setBusy(false); }
+  }
+
+  return (
+    <Panel title="Scheduled for" className="mb-4 max-w-[560px]">
+      <div className="p-4 flex items-center gap-2 flex-wrap">
+        <input
+          type="datetime-local"
+          className="field-input py-1.5 text-[13.5px] w-auto"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <Button variant="primary" disabled={busy || !changed || (!!value && !iso)} onClick={() => save(iso)}>
+          {busy ? 'Saving…' : 'Set'}
+        </Button>
+        {match.scheduled_at && (
+          <Button variant="ghost" disabled={busy} onClick={() => { setValue(''); save(null); }}>
+            Clear
+          </Button>
+        )}
+        <span className="text-[12px] text-ash ml-1">
+          {iso ? whenLocal(iso) : 'no time set'}
+        </span>
       </div>
     </Panel>
   );
