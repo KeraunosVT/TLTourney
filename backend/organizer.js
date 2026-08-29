@@ -195,6 +195,14 @@ router.put('/tournament', async (req, res) => {
     if (!allowed.includes(req.body.status)) {
       return res.status(400).json({ error: `Status must be one of: ${allowed.join(', ')}.` });
     }
+    // Archiving is the one status change that alters what the SITE is pointing
+    // at, so it is the one that asks. Every other transition is reversible with
+    // another click; this one hands the app to a different tournament.
+    if (req.body.status === 'complete' && String(req.body.confirm ?? '').trim() !== t.name) {
+      return res.status(400).json({
+        error: `Type the season's name exactly — "${t.name}" — to archive it.`,
+      });
+    }
     patch.status = req.body.status;
   }
   if (req.body?.signups_close_at !== undefined) {
@@ -235,6 +243,48 @@ router.put('/tournament', async (req, res) => {
 
   invalidateTournament();
   await audit(req.user, 'tournament.update', t.id, patch);
+  res.json({ tournament: data });
+});
+
+/**
+ * Start a new season.
+ *
+ * Only when nothing is running, and that guard is the whole safety of it:
+ * currentTournament picks the OLDEST unfinished tournament, so creating one
+ * beside a live season would leave the new row invisible until the old one was
+ * archived — a button that appears to do nothing, then does something
+ * surprising a month later.
+ *
+ * Everything but the name defaults: 8 parties of 6 plus 12 subs, and the party
+ * template that matches. Status is 'setup', not 'signups', so signups open when
+ * an organizer says so rather than the instant the row exists.
+ */
+router.post('/tournament', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+
+  const name = String(req.body?.name ?? '').trim();
+  if (!name) return res.status(400).json({ error: 'The season needs a name.' });
+  if (name.length > 80) return res.status(400).json({ error: 'Names are 80 characters or fewer.' });
+
+  const { data: running } = await supabase
+    .from('tournaments').select('id, name, status')
+    .neq('status', 'complete').order('created_at', { ascending: true }).limit(1).maybeSingle();
+  if (running) {
+    return res.status(409).json({
+      error: `"${running.name}" is still running. Archive it before starting a new season — `
+        + 'two unfinished tournaments and the site would keep showing the older one.',
+    });
+  }
+
+  const { data, error } = await supabase
+    .from('tournaments').insert({ name, status: 'setup' }).select('*').single();
+  if (error) {
+    console.error('tournament create failed:', error.message);
+    return res.status(500).json({ error: 'Could not create that season.' });
+  }
+
+  invalidateTournament();
+  await audit(req.user, 'tournament.create', data.id, { name });
   res.json({ tournament: data });
 });
 

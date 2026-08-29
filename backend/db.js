@@ -42,7 +42,27 @@ async function currentTournament({ fresh = false } = {}) {
     console.error('currentTournament failed:', error.message);
     return cached; // stale beats nothing; a null here 503s every page
   }
-  cached = data || null;
+
+  // Nothing running? Fall back to the most recently FINISHED tournament.
+  //
+  // Without this, archiving a season blanks the entire site — every page reads
+  // "no tournament is running", and a year of brackets and player statistics
+  // becomes unreachable through the UI the moment somebody marks the season
+  // over. A finished season is still the thing people want to look at until a
+  // new one exists, and `status` already stops anyone editing it.
+  let row = data || null;
+  if (!row) {
+    const { data: last } = await supabase
+      .from('tournaments')
+      .select('*')
+      .eq('status', 'complete')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    row = last || null;
+  }
+
+  cached = row;
   cachedAt = Date.now();
   return cached;
 }

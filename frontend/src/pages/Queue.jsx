@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { errorMessage } from '../api';
 import { weaponsLabel } from '@shared/classes.cjs';
-import { Panel, Pill, Button, Empty, Note } from '../components/ui';
+import { Panel, Pill, Button, Field, Empty, Note } from '../components/ui';
 import { whenLocal, toLocalInput, fromLocalInput } from '../lib/clock';
 
 // The full names are long enough to force a horizontal scrollbar on the queue,
@@ -191,6 +191,8 @@ export default function Queue() {
       {banner && <div className="mb-4"><Note tone={banner.tone}>{banner.text}</Note></div>}
 
       <Deadline tournament={tournament} onSave={setDeadline} />
+
+      <Season tournament={tournament} onDone={load} setBanner={setBanner} />
 
       <Panel
         title={null}
@@ -414,6 +416,122 @@ function Deadline({ tournament, onSave }) {
             ? 'Past the deadline, players can still withdraw but cannot file again.'
             : 'With no deadline set, signups stay open until you close them by hand.'}
         </p>
+      </div>
+    </Panel>
+  );
+}
+
+
+// ── The season itself ───────────────────────────────────────────────────────
+// Archiving is here rather than on the bracket because it is not a bracket
+// action — it ends the whole tournament, and the next thing anybody does after
+// it is start the next one. The two belong on one panel.
+//
+// Nothing archives automatically. A champion exists the moment the grand final
+// is recorded, and organizers spend the following week correcting scoreboards;
+// closing the season on their behalf would lock the thing they are still
+// editing, at exactly the moment it looked finished.
+function Season({ tournament, onDone, setBanner }) {
+  const [confirmText, setConfirmText] = useState('');
+  const [showArchive, setShowArchive] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [busy, setBusy] = useState(null);
+
+  if (!tournament) return null;
+  const archived = tournament.status === 'complete';
+
+  async function archive() {
+    setBusy('archive');
+    setBanner(null);
+    try {
+      await api.put('/api/organizer/tournament', { status: 'complete', confirm: confirmText });
+      setShowArchive(false);
+      setConfirmText('');
+      setBanner({ tone: 'good', text: `${tournament.name} is archived. Start the next season below.` });
+      onDone();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function create() {
+    setBusy('create');
+    setBanner(null);
+    try {
+      const { data } = await api.post('/api/organizer/tournament', { name: newName });
+      setNewName('');
+      setBanner({ tone: 'good', text: `${data.tournament.name} created — open signups when you are ready.` });
+      onDone();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Panel
+      title="Season"
+      subtitle={tournament.name}
+      className="mb-4 max-w-[860px]"
+      right={<Pill tone={archived ? 'quiet' : 'crimson'}>{archived ? 'archived' : tournament.status}</Pill>}
+    >
+      <div className="p-4 flex flex-col gap-3">
+        {!archived && (
+          <>
+            <p className="text-xs text-ash leading-relaxed max-w-[72ch]">
+              Archiving ends this season. Signups, the draft and the bracket all become read-only,
+              and the site keeps showing it until a new season exists — nothing disappears.
+            </p>
+            {!showArchive ? (
+              <Button variant="ghost" onClick={() => setShowArchive(true)} className="self-start">
+                Archive this season…
+              </Button>
+            ) : (
+              <div className="flex items-end gap-2 flex-wrap">
+                <div className="w-[280px]">
+                  <Field label="Type the season name" hint="Everything stays; it just stops being editable.">
+                    <input
+                      className="field-input py-1 text-[13px]"
+                      value={confirmText}
+                      onChange={(e) => setConfirmText(e.target.value)}
+                      placeholder={tournament.name}
+                    />
+                  </Field>
+                </div>
+                <Button variant="danger" disabled={busy} onClick={archive}>
+                  {busy === 'archive' ? 'Archiving…' : 'Archive'}
+                </Button>
+                <Button variant="ghost" onClick={() => { setShowArchive(false); setConfirmText(''); }}>
+                  Cancel
+                </Button>
+              </div>
+            )}
+          </>
+        )}
+
+        {archived && (
+          <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex-1 min-w-[260px]">
+              <Field
+                label="Start the next season"
+                hint="Opens in setup, with 8 parties of 6 and 12 subs. Open signups when you are ready."
+              >
+                <input
+                  className="field-input py-1.5 text-[13.5px]"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Season 3 Americas Draft Tournament"
+                />
+              </Field>
+            </div>
+            <Button variant="good" disabled={busy || !newName.trim()} onClick={create}>
+              {busy === 'create' ? 'Creating…' : 'Create season'}
+            </Button>
+          </div>
+        )}
       </div>
     </Panel>
   );

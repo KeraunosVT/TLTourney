@@ -63,6 +63,17 @@ export default function Match() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Refresh while the page is open, so a second organizer recording games sees
+  // them appear. Deliberately NOT while a review is on screen: `load` replaces
+  // the saved scoreboard, and a poll landing mid-review would be indistinct
+  // from it wiping half an hour of checking — the review lives in the browser
+  // until it is committed, and nothing may touch it but the person reading it.
+  useEffect(() => {
+    if (review) return undefined;
+    const id = setInterval(load, 6000);
+    return () => clearInterval(id);
+  }, [review, load]);
+
   useEffect(() => {
     // Seeded from the bracket's own A/B order so the pickers are never empty,
     // but it is a guess about a colour and the organizer has to confirm it —
