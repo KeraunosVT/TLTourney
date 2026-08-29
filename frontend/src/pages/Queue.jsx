@@ -128,6 +128,21 @@ export default function Queue() {
     }
   }
 
+  async function setDeadline(iso) {
+    try {
+      const { data } = await api.put('/api/organizer/tournament', { signups_close_at: iso });
+      setTournament(data.tournament);
+      setBanner({
+        tone: 'good',
+        text: iso
+          ? `Signups now close ${whenLocal(iso)}.`
+          : 'Deadline cleared — signups stay open until you close them by hand.',
+      });
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+    }
+  }
+
   if (loading) return <div className="p-8 text-sm text-ash">Loading…</div>;
 
   const open = tournament?.status === 'signups';
@@ -173,6 +188,8 @@ export default function Queue() {
         </div>
       )}
       {banner && <div className="mb-4"><Note tone={banner.tone}>{banner.text}</Note></div>}
+
+      <Deadline tournament={tournament} onSave={setDeadline} />
 
       <Panel
         title={null}
@@ -311,5 +328,110 @@ export default function Queue() {
         resubmitted. Every decision is written to the audit log.
       </p>
     </div>
+  );
+}
+
+
+// ── The signup deadline ─────────────────────────────────────────────────────
+// Entered and shown in the ORGANIZER'S OWN timezone, and echoed back with the
+// zone named, because "September 3rd at midnight" is two different instants a
+// day apart depending on whether you mean the start of the 3rd or the end of
+// it — and a third thing again depending on whose midnight. Showing the parsed
+// result under the input is what makes that decidable instead of arguable.
+//
+// The value travels as UTC. `datetime-local` gives local wall-clock time,
+// `new Date()` reads it as local, and toISOString converts — so the column
+// stores an instant and every reader renders it in their own time.
+function whenLocal(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'an invalid date';
+  return d.toLocaleString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  });
+}
+
+function toLocalInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function Deadline({ tournament, onSave }) {
+  const [value, setValue] = useState(toLocalInput(tournament?.signups_close_at));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setValue(toLocalInput(tournament?.signups_close_at));
+  }, [tournament?.signups_close_at]);
+
+  const parsed = value ? new Date(value) : null;
+  const valid = parsed && !Number.isNaN(parsed.getTime());
+  const passed = valid && parsed.getTime() < Date.now();
+  const current = tournament?.signups_close_at;
+  const changed = value !== toLocalInput(current);
+
+  async function save(iso) {
+    setBusy(true);
+    try { await onSave(iso); } finally { setBusy(false); }
+  }
+
+  return (
+    <Panel
+      title="Signup deadline"
+      subtitle="Filing and editing stop at this moment. Withdrawing does not."
+      className="mb-4 max-w-[860px]"
+      right={
+        current
+          ? <Pill tone={new Date(current) < new Date() ? 'bad' : 'quiet'}>
+              {new Date(current) < new Date() ? 'passed' : 'set'}
+            </Pill>
+          : <Pill tone="quiet">not set</Pill>
+      }
+    >
+      <div className="p-4 flex flex-col gap-3">
+        <div className="flex items-end gap-2 flex-wrap">
+          <input
+            type="datetime-local"
+            className="field-input py-1.5 text-[13.5px] w-auto"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <Button
+            variant="primary"
+            disabled={busy || !valid || !changed}
+            onClick={() => save(parsed.toISOString())}
+          >
+            {busy ? 'Saving…' : 'Set deadline'}
+          </Button>
+          {current && (
+            <Button variant="ghost" disabled={busy} onClick={() => save(null)}>
+              Clear
+            </Button>
+          )}
+        </div>
+
+        {/* The whole point of the panel. Read this back before saving — it is
+            the only place the ambiguity in "midnight on the 3rd" resolves. */}
+        {valid && (
+          <p className={`text-[13px] ${passed ? 'text-crimsonbright' : 'text-bone'}`}>
+            {changed ? 'Will close' : 'Closes'} <span className="font-semibold">{whenLocal(parsed.toISOString())}</span>
+            {passed && ' — that is in the past, so signups would close immediately.'}
+          </p>
+        )}
+
+        <p className="text-xs text-ash leading-relaxed max-w-[70ch]">
+          Shown in your timezone; every player sees it in theirs. Midnight at the START of a day
+          is 00:00 on that date — for the END of the 3rd, set 00:00 on the 4th.
+          {' '}
+          {current
+            ? 'Past the deadline, players can still withdraw but cannot file again.'
+            : 'With no deadline set, signups stay open until you close them by hand.'}
+        </p>
+      </div>
+    </Panel>
   );
 }
