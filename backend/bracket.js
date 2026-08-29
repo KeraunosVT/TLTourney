@@ -11,10 +11,11 @@ const express = require('express');
 const { supabase, currentTournament, audit } = require('./db');
 const { generateBracket, applyResult, roundLabel } = require('../shared/bracket.cjs');
 const { seriesResult, gameSlots, isBestOf } = require('../shared/series.cjs');
+const { isMap, available, isPlayable } = require('../shared/maps.cjs');
 
 const COLS = 'id, key, bracket, round, idx, slot_a, slot_b, team_a_id, team_b_id, '
   + 'winner_team_id, loser_team_id, kind, advances, status, is_reset, scheduled_at, '
-  + 'decided_at, decided_by, scoreboard_at, best_of';
+  + 'decided_at, decided_by, scoreboard_at, best_of, ban_a, ban_b';
 
 const TEAM = 'id, name, tag, seed';
 
@@ -160,6 +161,9 @@ async function bracketState(tournamentId) {
         winner: byId.get(r.winner_team_id) || null,
         games,
         series: seriesResult(games, r.best_of, r.team_a_id, r.team_b_id),
+        // Worked out here rather than on the page, so the picker and the
+        // validation that refuses a banned map are reading the same list.
+        maps_available: available([r.ban_a, r.ban_b]),
       };
     });
 
@@ -443,7 +447,7 @@ organizerRouter.post('/game', async (req, res) => {
   }
 
   const { data: match } = await supabase.from('matches')
-    .select('id, key, best_of, team_a_id, team_b_id')
+    .select('id, key, best_of, team_a_id, team_b_id, ban_a, ban_b')
     .eq('tournament_id', t.id).eq('key', key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
   if (!match.team_a_id || !match.team_b_id) {
@@ -460,7 +464,16 @@ organizerRouter.post('/game', async (req, res) => {
   }
 
   const patch = { tournament_id: t.id, match_id: match.id, game_number: number };
-  if (req.body?.map !== undefined) patch.map = String(req.body.map).trim().slice(0, 60) || null;
+  if (req.body?.map !== undefined) {
+    const map = String(req.body.map).trim() || null;
+    if (map && !isMap(map)) {
+      return res.status(400).json({ error: `"${map}" is not one of the tournament's maps.` });
+    }
+    if (map && !isPlayable(map, [match.ban_a, match.ban_b])) {
+      return res.status(409).json({ error: `${map} is banned in this match.` });
+    }
+    patch.map = map;
+  }
   if (winner !== undefined) {
     patch.winner_team_id = winner || null;
     patch.decided_at = winner ? new Date().toISOString() : null;
@@ -510,6 +523,70 @@ organizerRouter.delete('/game', async (req, res) => {
 
   await audit(req.user, 'bracket.game.remove', key, { game: number });
   res.json({ ok: true, ...(await bracketState(t.id)) });
+});
+
+/**
+ * The two map bans, one per team.
+ *
+ * Sent as a pair rather than one at a time, so "both teams banned the same map"
+ * is answerable in one place — the database refuses it too, but this can say
+ * WHICH map, which the constraint cannot.
+ *
+ * Clearing a ban is legal and is how a mistake gets fixed: send null.
+ */
+organizerRouter.put('/bans', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const key = String(req.body?.key || '');
+  const { data: match } = await supabase.from('matches')
+    .select('id, key, ban_a, ban_b').eq('tournament_id', t.id).eq('key', key).maybeSingle();
+  if (!match) return res.status(404).json({ error: 'No such match.' });
+
+  const read = (v, current) => {
+    if (v === undefined) return current;                 // not sent: leave it
+    const name = String(v ?? '').trim();
+    return name || null;                                 // sent empty: clear it
+  };
+
+  const banA = read(req.body?.ban_a, match.ban_a);
+  const banB = read(req.body?.ban_b, match.ban_b);
+
+  for (const b of [banA, banB]) {
+    if (b && !isMap(b)) return res.status(400).json({ error: `"${b}" is not one of the tournament's maps.` });
+  }
+  if (banA && banB && banA === banB) {
+    return res.status(409).json({
+      error: `Both teams cannot ban ${banA} — that leaves ten maps in play instead of nine.`,
+    });
+  }
+
+  const { error } = await supabase.from('matches')
+    .update({ ban_a: banA, ban_b: banB }).eq('id', match.id);
+  if (error) {
+    console.error('ban write failed:', error.message);
+    if (/ban_a|ban_b|column/.test(error.message)) {
+      return res.status(503).json({
+        error: 'The ban columns are missing — run migrations/014_map_bans.sql in the Supabase SQL editor.',
+      });
+    }
+    return res.status(500).json({ error: 'Could not save the bans.' });
+  }
+
+  // A ban entered after a game was recorded can strand that game on a map that
+  // is now banned. Reported rather than corrected — deleting somebody's
+  // recorded game to make a ban fit is not a call this should make.
+  const { data: played } = await supabase.from('match_games')
+    .select('game_number, map').eq('match_id', match.id).not('map', 'is', null);
+  const stranded = (played || []).filter((g) => !isPlayable(g.map, [banA, banB]));
+
+  await audit(req.user, 'bracket.bans', key, { ban_a: banA, ban_b: banB, stranded: stranded.length });
+  res.json({
+    ok: true,
+    stranded: stranded.map((g) => ({ game_number: g.game_number, map: g.map })),
+    ...(await bracketState(t.id)),
+  });
 });
 
 /** How long this series is. A grand final is often longer than the rounds. */

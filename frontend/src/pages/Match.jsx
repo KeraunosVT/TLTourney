@@ -48,7 +48,6 @@ export default function Match() {
   // Which game of the series is on screen. A best-of-three has up to three
   // scoreboards and they are three different sets of numbers.
   const [game, setGame] = useState(1);
-  const [maps, setMaps] = useState([]);
 
   const load = useCallback(async () => {
     try {
@@ -62,13 +61,6 @@ export default function Match() {
   }, [key]);
 
   useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    // Maps already used in this tournament, offered as suggestions. Free text
-    // underneath, so a new map is never refused — this only makes the spelling
-    // converge, which is what makes "which maps did we play" answerable later.
-    api.get('/api/stats/maps').then(({ data }) => setMaps(data.maps || [])).catch(() => {});
-  }, []);
 
   useEffect(() => {
     // Seeded from the bracket's own A/B order so the pickers are never empty,
@@ -127,6 +119,24 @@ export default function Match() {
       setBanner({ tone: 'bad', text: errorMessage(err) });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveBans(fields) {
+    setBanner(null);
+    try {
+      const { data: d } = await api.put('/api/organizer/bracket/bans', { key, ...fields });
+      if (d.stranded?.length) {
+        setBanner({
+          tone: 'bad',
+          text: `Game ${d.stranded.map((x) => x.game_number).join(', ')} `
+            + `${d.stranded.length === 1 ? 'was' : 'were'} played on a map that is now banned `
+            + `(${d.stranded.map((x) => x.map).join(', ')}) — fix the ban or the game.`,
+        });
+      }
+      load();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
     }
   }
 
@@ -192,11 +202,13 @@ export default function Match() {
 
       {banner && <div className="mb-4 max-w-[900px]"><Note tone={banner.tone}>{banner.text}</Note></div>}
 
+      <Bans match={m} available={data.mapsAvailable || []} canEdit={canEdit} onSave={saveBans} />
+
       <Games
         match={m}
         series={data.series}
         games={data.games || []}
-        maps={maps}
+        available={data.mapsAvailable || []}
         canEdit={canEdit}
         selected={game}
         onSelect={setGame}
@@ -624,7 +636,7 @@ function Saved({ rows, match, game }) {
 // One row per game played, plus the next one while the series is live. Not all
 // three: an empty game 3 under a finished 2-0 invites somebody to fill it in,
 // and a dead rubber recorded as a real game makes the series read 2-1.
-function Games({ match, series, games, maps, canEdit, selected, onSelect, onSave }) {
+function Games({ match, series, games, available, canEdit, selected, onSelect, onSave }) {
   const sides = [match.team_a, match.team_b].filter(Boolean);
 
   return (
@@ -640,10 +652,6 @@ function Games({ match, series, games, maps, canEdit, selected, onSelect, onSave
         </span>
       }
     >
-      <datalist id="map-names">
-        {maps.map((x) => <option key={x} value={x} />)}
-      </datalist>
-
       <div className="flex flex-col">
         {games.map((g) => {
           const on = g.game_number === selected;
@@ -663,20 +671,23 @@ function Games({ match, series, games, maps, canEdit, selected, onSelect, onSave
               </button>
 
               {canEdit ? (
-                <input
-                  list="map-names"
+                <select
                   className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px] w-[190px]
-                             outline-none focus:border-crimson placeholder:text-ash/60"
-                  placeholder="map"
-                  defaultValue={g.map || ''}
-                  // On blur, not on every keystroke — this writes to the
-                  // database and a map name is typed one character at a time.
-                  onBlur={(e) => {
-                    if ((g.map || '') !== e.target.value.trim()) {
-                      onSave(g.game_number, { map: e.target.value });
-                    }
-                  }}
-                />
+                             outline-none focus:border-crimson"
+                  value={g.map || ''}
+                  onChange={(e) => onSave(g.game_number, { map: e.target.value })}
+                >
+                  <option value="">— map —</option>
+                  {/* Only what survived the bans. A picker that offers a banned
+                      map is a picker that will eventually be used to choose
+                      one. */}
+                  {available.map((x) => <option key={x} value={x}>{x}</option>)}
+                  {/* A map recorded before a ban was entered would otherwise
+                      vanish from its own row, which reads as data loss. */}
+                  {g.map && !available.includes(g.map) && (
+                    <option value={g.map}>{g.map} — now banned</option>
+                  )}
+                </select>
               ) : (
                 <span className="text-[12.5px] text-ash w-[190px] truncate">{g.map || 'map not recorded'}</span>
               )}
@@ -717,6 +728,86 @@ function Games({ match, series, games, maps, canEdit, selected, onSelect, onSave
           Series decided — the bracket has advanced. Changing a game here will take that back.
         </div>
       )}
+    </Panel>
+  );
+}
+
+
+// ── Map bans ────────────────────────────────────────────────────────────────
+// One per team, so nine of the eleven maps survive into a best of three.
+//
+// Shown above the games rather than beside them because a ban is a fact about
+// the whole series — it is decided once, before anything is played, and every
+// game underneath is picked from what it leaves.
+function Bans({ match, available, canEdit, onSave }) {
+  const sides = [
+    { team: match.team_a, field: 'ban_a', value: match.ban_a },
+    { team: match.team_b, field: 'ban_b', value: match.ban_b },
+  ].filter((x) => x.team);
+
+  const banned = [match.ban_a, match.ban_b].filter(Boolean);
+
+  return (
+    <Panel
+      title="Map bans"
+      subtitle="One each, before the series starts"
+      className="mb-4"
+      right={
+        <span className="text-xs text-ash">
+          {available.length} map{available.length === 1 ? '' : 's'} left
+        </span>
+      }
+    >
+      <div className="p-4 flex flex-col gap-3">
+        <div className="flex gap-5 flex-wrap">
+          {sides.map(({ team, field, value }) => (
+            <label key={field} className="flex items-center gap-2">
+              <span className="text-[12.5px] text-ash w-[130px] truncate text-right">{team.name} bans</span>
+              {canEdit ? (
+                <select
+                  className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px] w-[170px]
+                             outline-none focus:border-crimson"
+                  value={value || ''}
+                  onChange={(e) => onSave({ [field]: e.target.value })}
+                >
+                  <option value="">— no ban yet —</option>
+                  {/* Their own current ban stays listed so the select can show
+                      it; the other team's is left out, because banning it
+                      wastes a ban and the server refuses it anyway. */}
+                  {[...available, ...(value ? [value] : [])]
+                    .sort((a, b) => a.localeCompare(b))
+                    .map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              ) : (
+                <span className={`text-[12.5px] w-[170px] ${value ? 'text-crimsonbright line-through' : 'text-ash'}`}>
+                  {value || 'no ban yet'}
+                </span>
+              )}
+            </label>
+          ))}
+        </div>
+
+        {/* The whole pool, struck through where banned. The point of showing it
+            is that "what is still available" is the question being asked, and
+            counting it off two dropdowns is work. */}
+        <div className="flex flex-wrap gap-1.5 border-t border-line pt-3">
+          {[...available, ...banned].sort((a, b) => a.localeCompare(b)).map((name) => {
+            const out = banned.includes(name);
+            return (
+              <span
+                key={name}
+                className={`px-2 py-0.5 rounded border text-[11.5px] ${
+                  out
+                    ? 'border-oxblood/60 text-ash/50 line-through'
+                    : 'border-line text-bone'
+                }`}
+              >
+                {name}
+              </span>
+            );
+          })}
+        </div>
+      </div>
     </Panel>
   );
 }

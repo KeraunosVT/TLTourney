@@ -29,6 +29,7 @@ const {
 } = require('../shared/scoreboard.cjs');
 const { classify } = require('../shared/classes.cjs');
 const { seriesResult, gameSlots } = require('../shared/series.cjs');
+const { MAPS, available } = require('../shared/maps.cjs');
 
 // In memory, not on disk: a scoreboard screenshot is read once and never needed
 // again, and writing it to the filesystem of whatever host this is on would be
@@ -87,7 +88,7 @@ router.get('/match/:key', async (req, res) => {
   if (!t) return res.json({ match: null, rows: [] });
 
   const { data: match } = await supabase.from('matches')
-    .select('id, key, bracket, round, idx, best_of, team_a_id, team_b_id, winner_team_id, status, scoreboard_at')
+    .select('id, key, bracket, round, idx, best_of, team_a_id, team_b_id, winner_team_id, status, scoreboard_at, ban_a, ban_b')
     .eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
 
@@ -120,27 +121,13 @@ router.get('/match/:key', async (req, res) => {
       winner: byId.get(match.winner_team_id) || null,
     },
     series: seriesResult(games || [], match.best_of, match.team_a_id, match.team_b_id),
+    maps: MAPS,
+    mapsAvailable: available([match.ban_a, match.ban_b]),
     games: slots.map((g) => ({ ...g, rows: byGame.get(g.id) || [] })),
     // Rows recorded before 013 split matches into games. Kept visible rather
     // than orphaned into a tab that does not exist.
     looseRows: byGame.get('none') || [],
   });
-});
-
-/** Maps already used in this tournament, so spelling converges without a list. */
-router.get('/maps', async (req, res) => {
-  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
-  const t = await currentTournament();
-  if (!t) return res.json({ maps: [] });
-
-  const { data } = await supabase.from('match_games')
-    .select('map').eq('tournament_id', t.id).not('map', 'is', null);
-  const seen = new Map();
-  (data || []).forEach((r) => {
-    const name = String(r.map || '').trim();
-    if (name) seen.set(name.toLowerCase(), name);
-  });
-  res.json({ maps: [...seen.values()].sort((a, b) => a.localeCompare(b)) });
 });
 
 /** The tournament leaderboard. */

@@ -396,4 +396,22 @@ select '013 · every decided match won its series',
           where m.winner_team_id is not null
             and (select count(*) from match_games g
                   where g.match_id = m.id and g.winner_team_id = m.winner_team_id)
-                < (m.best_of / 2) + 1);
+                < (m.best_of / 2) + 1)
+union all
+-- ── 014 ────────────────────────────────────────────────────────────────────
+select '014 · matches.ban_a and ban_b',
+       (select count(*) = 2 from information_schema.columns
+         where table_schema = 'public' and table_name = 'matches'
+           and column_name in ('ban_a', 'ban_b'))
+union all
+-- Both teams banning the same map wastes a ban and leaves ten in play when the
+-- rules say nine.
+select '014 · the two bans must differ',
+       exists (select 1 from pg_constraint where conname = 'matches_bans_differ')
+union all
+-- A ban entered after a game was played can strand it on a map that is now
+-- banned. The app reports it; this is how you find any that were left.
+select '014 · no game is played on a banned map',
+       not exists (select 1 from match_games g
+                   join matches m on m.id = g.match_id
+                   where g.map is not null and g.map in (m.ban_a, m.ban_b));
