@@ -66,10 +66,13 @@ export default function MatchScene({ focus, teams }) {
 
           {/* Bans last: they are context for the maps above, and reading them
               first would be reading the negative space before the picture. */}
-          {(focus.ban_a || focus.ban_b) && (
+          {((focus.bans_a || []).length > 0 || (focus.bans_b || []).length > 0) && (
             <div className="px-[1.2vw] py-[1vh] border-t border-line flex items-center gap-[1.4vw] flex-wrap">
               <span className="text-[1.05vh] uppercase tracking-[0.2em] text-ash">Banned</span>
-              {[[focus.ban_a, a], [focus.ban_b, b]].filter(([m]) => m).map(([map, team]) => (
+              {[
+                ...(focus.bans_a || []).map((m) => [m, a]),
+                ...(focus.bans_b || []).map((m) => [m, b]),
+              ].map(([map, team]) => (
                 <span key={map} className="text-[1.4vh]">
                   <span className="line-through text-crimsonbright">{map}</span>
                   <span className="text-ash text-[1.1vh] ml-[0.4vw]">{team?.tag || team?.name}</span>

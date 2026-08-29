@@ -92,7 +92,7 @@ router.get('/match/:key', async (req, res) => {
   if (!t) return res.json({ match: null, rows: [] });
 
   const { data: match } = await supabase.from('matches')
-    .select('id, key, bracket, round, idx, best_of, team_a_id, team_b_id, winner_team_id, status, scoreboard_at, ban_a, ban_b')
+    .select('id, key, bracket, round, idx, best_of, team_a_id, team_b_id, winner_team_id, status, scoreboard_at, bans_a, bans_b')
     .eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
 
@@ -126,7 +126,7 @@ router.get('/match/:key', async (req, res) => {
     },
     series: seriesResult(games || [], match.best_of, match.team_a_id, match.team_b_id),
     maps: MAPS,
-    mapsAvailable: available([match.ban_a, match.ban_b]),
+    mapsAvailable: available([...(match.bans_a || []), ...(match.bans_b || [])]),
     games: slots.map((g) => ({ ...g, rows: byGame.get(g.id) || [] })),
     // Rows recorded before 013 split matches into games. Kept visible rather
     // than orphaned into a tab that does not exist.

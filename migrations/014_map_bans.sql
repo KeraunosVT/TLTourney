@@ -1,5 +1,11 @@
 -- 014_map_bans.sql — one map ban per team, per match.
 --
+-- SUPERSEDED BY 015, which replaces ban_a/ban_b with a list per side and drops
+-- these two columns. Kept because it has already run: a migration that has
+-- been applied is history, and rewriting it would leave anyone who ran the old
+-- one with a database no file describes. Run it anyway if you are starting
+-- fresh — 015 carries its data across and then removes it.
+--
 -- Run in the Supabase SQL editor AFTER 013. Safe to re-run.
 --
 -- Eleven maps, two bans, nine left for a best of three.

@@ -398,20 +398,38 @@ select '013 · every decided match won its series',
                   where g.match_id = m.id and g.winner_team_id = m.winner_team_id)
                 < (m.best_of / 2) + 1)
 union all
--- ── 014 ────────────────────────────────────────────────────────────────────
-select '014 · matches.ban_a and ban_b',
+-- ── 014 + 015 ──────────────────────────────────────────────────────────────
+-- 014's single ban per side became a list per side in 015, and 015 drops the
+-- old columns. Both halves are checked: the new shape is there AND the old one
+-- is gone, because two columns describing one fact is how they come to disagree.
+select '015 · matches.bans_a and bans_b',
        (select count(*) = 2 from information_schema.columns
          where table_schema = 'public' and table_name = 'matches'
-           and column_name in ('ban_a', 'ban_b'))
+           and column_name in ('bans_a', 'bans_b')
+           and data_type = 'ARRAY')
 union all
--- Both teams banning the same map wastes a ban and leaves ten in play when the
--- rules say nine.
-select '014 · the two bans must differ',
-       exists (select 1 from pg_constraint where conname = 'matches_bans_differ')
+select '015 · 014''s single-ban columns are gone',
+       not exists (select 1 from information_schema.columns
+                    where table_schema = 'public' and table_name = 'matches'
+                      and column_name in ('ban_a', 'ban_b'))
+union all
+-- At most four across the match, and no map banned by both sides — which wastes
+-- a ban and leaves the pool one bigger than the rules say.
+select '015 · the ban count and overlap are constrained',
+       exists (select 1 from pg_constraint where conname = 'matches_bans_sane')
 union all
 -- A ban entered after a game was played can strand it on a map that is now
 -- banned. The app reports it; this is how you find any that were left.
-select '014 · no game is played on a banned map',
+select '015 · no game is played on a banned map',
        not exists (select 1 from match_games g
                    join matches m on m.id = g.match_id
-                   where g.map is not null and g.map in (m.ban_a, m.ban_b));
+                   where g.map is not null
+                     and g.map = any (m.bans_a || m.bans_b))
+union all
+-- The rules say two to four. Nothing enforces the floor on the way in — a match
+-- part way through its bans has one — so a match that is COMPLETE with fewer
+-- than two is the case worth finding after the fact.
+select '015 · every played match banned at least two',
+       not exists (select 1 from matches m
+                   where m.status = 'complete' and m.kind = 'match'
+                     and cardinality(m.bans_a) + cardinality(m.bans_b) < 2);

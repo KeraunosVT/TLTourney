@@ -163,15 +163,36 @@ const okCall = (r, what) => {
     const first = (okCall(await call(bracket.organizerRouter, 'GET', '/'), 'read')).matches
       .find((m) => m.status === 'ready');
 
+    // Four bans, two each — the top of the range, so the ceiling is exercised
+    // rather than assumed.
     const banned = okCall(await call(bracket.organizerRouter, 'PUT', '/bans',
-      { body: { key: first.key, ban_a: MAPS[0], ban_b: MAPS[1] } }), 'bans');
+      { body: { key: first.key, bans_a: [MAPS[0], MAPS[2]], bans_b: [MAPS[1], MAPS[3]] } }), 'bans');
     const afterBan = banned.matches.find((m) => m.key === first.key);
-    ok(afterBan.maps_available.length === MAPS.length - 2,
-      `${afterBan.maps_available.length} maps left after two bans`);
+    ok(afterBan.maps_available.length === MAPS.length - 4,
+      `${afterBan.maps_available.length} maps left after four bans`);
+
+    // A side left out of the body keeps its bans. Sending only team A used to
+    // be harmless when each side had one; with lists it is one typo away from
+    // wiping the other side's.
+    const onlyA = okCall(await call(bracket.organizerRouter, 'PUT', '/bans',
+      { body: { key: first.key, bans_a: [MAPS[0], MAPS[2]] } }), 'bans (one side)');
+    const keptB = onlyA.matches.find((m) => m.key === first.key);
+    ok((keptB.bans_b || []).length === 2, 'a side not mentioned keeps its bans');
 
     const sameBan = await call(bracket.organizerRouter, 'PUT', '/bans',
-      { body: { key: first.key, ban_a: MAPS[0], ban_b: MAPS[0] } });
+      { body: { key: first.key, bans_a: [MAPS[0]], bans_b: [MAPS[0]] } });
     ok(sameBan.status === 409, `both teams banning one map is refused ("${sameBan.body?.error?.slice(0, 44)}…")`);
+
+    const fiveBans = await call(bracket.organizerRouter, 'PUT', '/bans',
+      { body: { key: first.key, bans_a: MAPS.slice(0, 3), bans_b: MAPS.slice(3, 6) } });
+    ok(fiveBans.status === 409, `six bans in one match is refused ("${fiveBans.body?.error?.slice(0, 40)}…")`);
+
+    // And the refusals left the four that were there. A rejected write that
+    // half-applied would be worse than one that failed.
+    const stillFour = okCall(await call(bracket.organizerRouter, 'GET', '/'), 'read')
+      .matches.find((m) => m.key === first.key);
+    ok(stillFour.maps_available.length === MAPS.length - 4,
+      'the refused bans changed nothing');
 
     const bannedMap = await call(bracket.organizerRouter, 'POST', '/game',
       { body: { key: first.key, game_number: 1, map: MAPS[0] } });

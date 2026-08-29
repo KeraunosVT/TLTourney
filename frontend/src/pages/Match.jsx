@@ -15,6 +15,7 @@ import { Panel, Pill, Button, Note, Empty } from '../components/ui';
 import { useAuth } from '../auth';
 import { CLASS_NAMES, WEAPONS_FOR, classify, weaponsLabel } from '@shared/classes.cjs';
 import { applySides, candidatesFor } from '@shared/scoreboard.cjs';
+import { MIN_BANS_PER_MATCH, MAX_BANS_PER_MATCH } from '@shared/maps.cjs';
 import { whenLocal, toLocalInput, fromLocalInput } from '../lib/clock';
 
 // 3254684 → "3.25M". A scoreboard is a wall of seven-digit numbers, and nobody
@@ -765,75 +766,108 @@ function Games({ match, series, games, available, canEdit, selected, onSelect, o
 
 
 // ── Map bans ────────────────────────────────────────────────────────────────
-// One per team, so nine of the eleven maps survive into a best of three.
+// Two to four across the match, split between the sides however the two of them
+// actually took them.
+//
+// A LIST per team rather than a dropdown each, because the count is no longer
+// fixed: two each is the usual shape, but three and one is a legal one, and a
+// pair of single selects cannot say either. Bans are added one at a time and
+// removed one at a time, in the order they were taken — which is the order
+// people call them out in.
 //
 // Shown above the games rather than beside them because a ban is a fact about
-// the whole series — it is decided once, before anything is played, and every
-// game underneath is picked from what it leaves.
+// the whole series: decided once, before anything is played, and every game
+// underneath is picked from what it leaves.
 function Bans({ match, available, canEdit, onSave }) {
   const sides = [
-    { team: match.team_a, field: 'ban_a', value: match.ban_a },
-    { team: match.team_b, field: 'ban_b', value: match.ban_b },
+    { team: match.team_a, field: 'bans_a', value: match.bans_a || [] },
+    { team: match.team_b, field: 'bans_b', value: match.bans_b || [] },
   ].filter((x) => x.team);
 
-  const banned = [match.ban_a, match.ban_b].filter(Boolean);
+  const banned = [...(match.bans_a || []), ...(match.bans_b || [])];
+  const full = banned.length >= MAX_BANS_PER_MATCH;
+  // Who banned what, for the pool strip underneath. Built from the same two
+  // lists rather than from a third copy.
+  const bannedBy = new Map(sides.flatMap(({ team, value }) => value.map((m) => [m, team])));
 
   return (
     <Panel
       title="Map bans"
-      subtitle="One each, before the series starts"
+      subtitle={`Between ${MIN_BANS_PER_MATCH} and ${MAX_BANS_PER_MATCH} per match, before the series starts`}
       className="mb-4"
       right={
         <span className="text-xs text-ash">
-          {available.length} map{available.length === 1 ? '' : 's'} left
+          {banned.length} banned · {available.length} map{available.length === 1 ? '' : 's'} left
         </span>
       }
     >
       <div className="p-4 flex flex-col gap-3">
-        <div className="flex gap-5 flex-wrap">
+        <div className="flex gap-6 flex-wrap">
           {sides.map(({ team, field, value }) => (
-            <label key={field} className="flex items-center gap-2">
-              <span className="text-[12.5px] text-ash w-[130px] truncate text-right">{team.name} bans</span>
-              {canEdit ? (
-                <select
-                  className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px] w-[170px]
-                             outline-none focus:border-crimson"
-                  value={value || ''}
-                  onChange={(e) => onSave({ [field]: e.target.value })}
-                >
-                  <option value="">— no ban yet —</option>
-                  {/* Their own current ban stays listed so the select can show
-                      it; the other team's is left out, because banning it
-                      wastes a ban and the server refuses it anyway. */}
-                  {[...available, ...(value ? [value] : [])]
-                    .sort((a, b) => a.localeCompare(b))
-                    .map((x) => <option key={x} value={x}>{x}</option>)}
-                </select>
-              ) : (
-                <span className={`text-[12.5px] w-[170px] ${value ? 'text-crimsonbright line-through' : 'text-ash'}`}>
-                  {value || 'no ban yet'}
-                </span>
+            <div key={field} className="flex flex-col gap-1.5 min-w-[210px]">
+              <span className="text-[12.5px] text-ash truncate">{team.name} bans</span>
+
+              {value.length === 0 && !canEdit && (
+                <span className="text-[12.5px] text-ash">no bans yet</span>
               )}
-            </label>
+
+              {value.map((name) => (
+                <div key={name} className="flex items-center gap-2">
+                  <span className="text-[12.5px] text-crimsonbright line-through">{name}</span>
+                  {canEdit && (
+                    <button
+                      // Removing a ban is the only way to correct one, so it is
+                      // a button rather than a re-pick: the list has no fixed
+                      // length to overwrite a slot in.
+                      onClick={() => onSave({ [field]: value.filter((x) => x !== name) })}
+                      className="text-[11px] text-ash hover:text-bone underline underline-offset-2"
+                      title={`Undo ${team.name}'s ban of ${name}`}
+                    >
+                      undo
+                    </button>
+                  )}
+                </div>
+              ))}
+
+              {canEdit && (
+                <select
+                  className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px] w-[190px]
+                             outline-none focus:border-crimson disabled:opacity-40"
+                  // Stays empty: it is an "add one" control, not a field
+                  // holding a value. What has been banned is the list above it.
+                  value=""
+                  disabled={full}
+                  onChange={(e) => e.target.value && onSave({ [field]: [...value, e.target.value] })}
+                >
+                  <option value="">{full ? `— ${MAX_BANS_PER_MATCH} bans already —` : '— ban a map —'}</option>
+                  {/* Only what is still in the pool. The other side's bans are
+                      left out because banning them wastes a ban, and this
+                      side's own are already listed above. */}
+                  {available.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+              )}
+            </div>
           ))}
         </div>
 
         {/* The whole pool, struck through where banned. The point of showing it
             is that "what is still available" is the question being asked, and
-            counting it off two dropdowns is work. */}
+            counting it off two lists is work. */}
         <div className="flex flex-wrap gap-1.5 border-t border-line pt-3">
           {[...available, ...banned].sort((a, b) => a.localeCompare(b)).map((name) => {
-            const out = banned.includes(name);
+            const by = bannedBy.get(name);
             return (
               <span
                 key={name}
+                title={by ? `banned by ${by.name}` : ''}
                 className={`px-2 py-0.5 rounded border text-[11.5px] ${
-                  out
+                  by
                     ? 'border-oxblood/60 text-ash/50 line-through'
                     : 'border-line text-bone'
                 }`}
               >
                 {name}
+                {by && <span className="ml-1 no-underline text-[10px]">{by.tag || ''}</span>}
               </span>
             );
           })}

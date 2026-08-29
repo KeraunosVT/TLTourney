@@ -26,10 +26,63 @@ const MAPS = [
 
 const isMap = (name) => MAPS.includes(name);
 
-// One ban per team, so two per match. Kept as a named constant because the
-// arithmetic below reads as nonsense without it, and because "two bans" is a
-// rule that will get argued about and changed.
-const BANS_PER_MATCH = 2;
+// Between two and four bans per MATCH — not per team. The split between the
+// sides is whatever the two of them actually took: two each is the usual shape,
+// but a format that hands the higher seed an extra ban is three and one, and
+// recording that is not the app's decision to override.
+//
+// Only the ceiling is enforced. A match part way through its bans has one, and
+// a floor checked on the way in would mean bans could only ever be saved all at
+// once — the minimum is a rule to show people, not a rule to refuse saves with.
+const MIN_BANS_PER_MATCH = 2;
+const MAX_BANS_PER_MATCH = 4;
+
+/**
+ * A side's bans, cleaned up.
+ *
+ * Takes what arrives — an array, a lone string from an older caller, null —
+ * and returns a list of trimmed, non-empty, DEDUPLICATED names. The dedupe is
+ * here rather than only in the route because the database cannot express it:
+ * its CHECK catches the same map banned by both sides, but not the same map
+ * twice on one side.
+ */
+function banList(v) {
+  const raw = v == null ? [] : (Array.isArray(v) ? v : [v]);
+  const out = [];
+  for (const x of raw) {
+    const name = String(x ?? '').trim();
+    if (name && !out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
+/**
+ * What is wrong with this pair of ban lists, in words, or null if nothing is.
+ *
+ * One function so the API's answer and the page's answer are the same sentence.
+ * Order matters: a made-up map is reported before the count, because "that is
+ * not a map" is more useful than "that is five bans" when the fifth is a typo.
+ */
+function banProblem(a, b) {
+  const A = banList(a);
+  const B = banList(b);
+  const all = [...A, ...B];
+
+  const unknown = all.find((m) => !isMap(m));
+  if (unknown) return `"${unknown}" is not one of the tournament's maps.`;
+
+  const both = A.find((m) => B.includes(m));
+  if (both) {
+    return `Both teams banned ${both} — that leaves one more map in play than the rules say, `
+      + 'and which side keeps the ban is not something this can decide.';
+  }
+
+  if (all.length > MAX_BANS_PER_MATCH) {
+    return `A match takes at most ${MAX_BANS_PER_MATCH} bans; that is ${all.length}.`;
+  }
+
+  return null;
+}
 
 /**
  * What is left to play on.
@@ -53,4 +106,7 @@ function available(bans = []) {
  */
 const isPlayable = (map, bans = []) => isMap(map) && !bans.filter(isMap).includes(map);
 
-module.exports = { MAPS, isMap, available, isPlayable, BANS_PER_MATCH };
+module.exports = {
+  MAPS, isMap, available, isPlayable,
+  banList, banProblem, MIN_BANS_PER_MATCH, MAX_BANS_PER_MATCH,
+};

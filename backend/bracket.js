@@ -11,12 +11,12 @@ const express = require('express');
 const { supabase, currentTournament, audit } = require('./db');
 const { generateBracket, applyResult, roundLabel } = require('../shared/bracket.cjs');
 const { seriesResult, gameSlots, isBestOf } = require('../shared/series.cjs');
-const { isMap, available, isPlayable } = require('../shared/maps.cjs');
+const { isMap, available, isPlayable, banList, banProblem } = require('../shared/maps.cjs');
 const { classify } = require('../shared/classes.cjs');
 
 const COLS = 'id, key, bracket, round, idx, slot_a, slot_b, team_a_id, team_b_id, '
   + 'winner_team_id, loser_team_id, kind, advances, status, is_reset, scheduled_at, '
-  + 'decided_at, decided_by, scoreboard_at, best_of, ban_a, ban_b';
+  + 'decided_at, decided_by, scoreboard_at, best_of, bans_a, bans_b';
 
 const TEAM = 'id, name, tag, seed';
 
@@ -183,7 +183,7 @@ async function bracketState(tournamentId) {
         series: seriesResult(games, r.best_of, r.team_a_id, r.team_b_id),
         // Worked out here rather than on the page, so the picker and the
         // validation that refuses a banned map are reading the same list.
-        maps_available: available([r.ban_a, r.ban_b]),
+        maps_available: available([...(r.bans_a || []), ...(r.bans_b || [])]),
       };
     });
 
@@ -583,7 +583,7 @@ organizerRouter.post('/game', async (req, res) => {
   }
 
   const { data: match } = await supabase.from('matches')
-    .select('id, key, best_of, team_a_id, team_b_id, ban_a, ban_b')
+    .select('id, key, best_of, team_a_id, team_b_id, bans_a, bans_b')
     .eq('tournament_id', t.id).eq('key', key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
   if (!match.team_a_id || !match.team_b_id) {
@@ -605,7 +605,7 @@ organizerRouter.post('/game', async (req, res) => {
     if (map && !isMap(map)) {
       return res.status(400).json({ error: `"${map}" is not one of the tournament's maps.` });
     }
-    if (map && !isPlayable(map, [match.ban_a, match.ban_b])) {
+    if (map && !isPlayable(map, [...(match.bans_a || []), ...(match.bans_b || [])])) {
       return res.status(409).json({ error: `${map} is banned in this match.` });
     }
     patch.map = map;
@@ -662,13 +662,16 @@ organizerRouter.delete('/game', async (req, res) => {
 });
 
 /**
- * The two map bans, one per team.
+ * The map bans — a list per team, two to four across the match.
  *
- * Sent as a pair rather than one at a time, so "both teams banned the same map"
- * is answerable in one place — the database refuses it too, but this can say
- * WHICH map, which the constraint cannot.
+ * Sent as a pair of whole lists rather than one ban at a time, for the reason
+ * the single-ban version was: the rules that matter are about the two sides
+ * TOGETHER — the same map banned by both, and the total count — and neither is
+ * answerable while looking at one side. The database refuses both too, but a
+ * constraint cannot say WHICH map, and this can.
  *
- * Clearing a ban is legal and is how a mistake gets fixed: send null.
+ * A side that is not mentioned in the body is left alone; a side sent as an
+ * empty list is cleared, which is how a mistake gets fixed.
  */
 organizerRouter.put('/bans', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
@@ -677,34 +680,32 @@ organizerRouter.put('/bans', async (req, res) => {
 
   const key = String(req.body?.key || '');
   const { data: match } = await supabase.from('matches')
-    .select('id, key, ban_a, ban_b').eq('tournament_id', t.id).eq('key', key).maybeSingle();
+    .select('id, key, bans_a, bans_b').eq('tournament_id', t.id).eq('key', key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
 
-  const read = (v, current) => {
-    if (v === undefined) return current;                 // not sent: leave it
-    const name = String(v ?? '').trim();
-    return name || null;                                 // sent empty: clear it
-  };
+  // banList takes a lone string as well as an array, so a caller sending one
+  // name still works — but "not sent at all" and "sent empty" have to stay
+  // different, or a body naming only team A would silently wipe team B.
+  const read = (v, current) => (v === undefined ? banList(current) : banList(v));
 
-  const banA = read(req.body?.ban_a, match.ban_a);
-  const banB = read(req.body?.ban_b, match.ban_b);
+  const bansA = read(req.body?.bans_a, match.bans_a);
+  const bansB = read(req.body?.bans_b, match.bans_b);
 
-  for (const b of [banA, banB]) {
-    if (b && !isMap(b)) return res.status(400).json({ error: `"${b}" is not one of the tournament's maps.` });
-  }
-  if (banA && banB && banA === banB) {
-    return res.status(409).json({
-      error: `Both teams cannot ban ${banA} — that leaves ten maps in play instead of nine.`,
-    });
+  const problem = banProblem(bansA, bansB);
+  if (problem) {
+    // A made-up map is the caller's mistake to fix; the rest are states the
+    // match is in. 400 versus 409 is that distinction and nothing else.
+    const code = /is not one of the tournament's maps/.test(problem) ? 400 : 409;
+    return res.status(code).json({ error: problem });
   }
 
   const { error } = await supabase.from('matches')
-    .update({ ban_a: banA, ban_b: banB }).eq('id', match.id);
+    .update({ bans_a: bansA, bans_b: bansB }).eq('id', match.id);
   if (error) {
     console.error('ban write failed:', error.message);
-    if (/ban_a|ban_b|column/.test(error.message)) {
+    if (/bans_a|bans_b|column|schema cache/i.test(error.message)) {
       return res.status(503).json({
-        error: 'The ban columns are missing — run migrations/014_map_bans.sql in the Supabase SQL editor.',
+        error: 'The ban columns are missing — run migrations/015_map_bans_many.sql in the Supabase SQL editor.',
       });
     }
     return res.status(500).json({ error: 'Could not save the bans.' });
@@ -715,9 +716,10 @@ organizerRouter.put('/bans', async (req, res) => {
   // recorded game to make a ban fit is not a call this should make.
   const { data: played } = await supabase.from('match_games')
     .select('game_number, map').eq('match_id', match.id).not('map', 'is', null);
-  const stranded = (played || []).filter((g) => !isPlayable(g.map, [banA, banB]));
+  const stranded = (played || []).filter((g) => !isPlayable(g.map, [...bansA, ...bansB]));
 
-  await audit(req.user, 'bracket.bans', key, { ban_a: banA, ban_b: banB, stranded: stranded.length });
+  await audit(req.user, 'bracket.bans', key,
+    { bans_a: bansA, bans_b: bansB, stranded: stranded.length });
   res.json({
     ok: true,
     stranded: stranded.map((g) => ({ game_number: g.game_number, map: g.map })),
