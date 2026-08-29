@@ -374,3 +374,108 @@ test('a full ten-page board with overlap comes out whole and once', () => {
   assert.deepStrictEqual(conflicts, []);
   assert.deepStrictEqual(rows.map((r) => r.rank), all.map((r) => r.rank), 'in rank order, no gaps');
 });
+
+// ── Which side was which ────────────────────────────────────────────────────
+// The scoreboard splits everybody into Yellow and Red, and that column decides
+// which of the two teams a row counts for. Getting it from the NAME instead —
+// which is what this did at first — puts a mis-OCR'd row on the wrong team with
+// nothing on the page disagreeing with itself.
+const { inferSides, applySides, candidatesFor } = require('../../shared/scoreboard.cjs');
+
+const sideRoster = [
+  { id: 'a1', player_name: 'Ann', team_id: 'A' },
+  { id: 'a2', player_name: 'Abe', team_id: 'A' },
+  { id: 'b1', player_name: 'Bob', team_id: 'B' },
+  { id: 'b2', player_name: 'Bea', team_id: 'B' },
+];
+const srow = (player_name, team_color) => ({ player_name, team_color, rank: 1 });
+
+test('the colour-to-team mapping is voted for by the rows that matched', () => {
+  const linked = linkRows(
+    [srow('Ann', 'Yellow'), srow('Abe', 'Yellow'), srow('Bob', 'Red')],
+    sideRoster
+  );
+  const { sides, confident } = inferSides(linked, sideRoster);
+  assert.deepStrictEqual(sides, { Yellow: 'A', Red: 'B' });
+  assert.ok(confident);
+});
+
+test('ONE SIDE KNOWN PLACES THE OTHER — a match has exactly two teams', () => {
+  const linked = linkRows([srow('Ann', 'Yellow'), srow('Nobody', 'Red')], sideRoster);
+  const { sides } = inferSides(linked, sideRoster);
+  assert.strictEqual(sides.Yellow, 'A');
+  assert.strictEqual(sides.Red, 'B', 'inferred from Yellow being A');
+});
+
+test('a stray misread does not outvote the rest of the board', () => {
+  // One row read as the wrong colour is normal. It must not flip a side.
+  const linked = linkRows(
+    [srow('Ann', 'Yellow'), srow('Abe', 'Yellow'), srow('Bob', 'Yellow'), srow('Bea', 'Red')],
+    sideRoster
+  );
+  assert.strictEqual(inferSides(linked, sideRoster).sides.Yellow, 'A');
+});
+
+test('a tie is not an answer', () => {
+  // Equal votes for one colour means the read is too confused to guess from,
+  // and guessing would put half a roster on the wrong side.
+  const linked = linkRows([srow('Ann', 'Yellow'), srow('Bob', 'Yellow')], sideRoster);
+  const { sides, confident } = inferSides(linked, sideRoster);
+  assert.strictEqual(sides.Yellow, null);
+  assert.ok(!confident);
+});
+
+test('both colours cannot resolve to the same team', () => {
+  const linked = linkRows([srow('Ann', 'Yellow'), srow('Abe', 'Red')], sideRoster);
+  const { sides } = inferSides(linked, sideRoster);
+  assert.notStrictEqual(sides.Yellow, sides.Red);
+});
+
+test('nothing matched means no guess at all', () => {
+  const linked = linkRows([srow('Ghost', 'Yellow'), srow('Spectre', 'Red')], sideRoster);
+  const { sides, confident } = inferSides(linked, sideRoster);
+  assert.deepStrictEqual(sides, { Yellow: null, Red: null });
+  assert.ok(!confident);
+});
+
+// ── Applying it ─────────────────────────────────────────────────────────────
+test('AN UNMATCHED ROW STILL GETS A TEAM, FROM ITS COLOUR', () => {
+  // The whole reason the colour decides this. A row whose name matched nobody
+  // is still one of the two sides, and the screenshot says which.
+  const linked = linkRows([srow('Ann', 'Yellow'), srow('Stranger', 'Red')], sideRoster);
+  const applied = applySides(linked, { Yellow: 'A', Red: 'B' }, sideRoster);
+  const stranger = applied.find((r) => r.player_name === 'Stranger');
+  assert.strictEqual(stranger.signup_id, null, 'still nobody');
+  assert.strictEqual(stranger.team_id, 'B', 'but on a side');
+});
+
+test('a name on one team playing the other team\'s colour is FLAGGED, not fixed', () => {
+  // One of the two readings is wrong and which takes a human looking at the
+  // screenshot. Quietly preferring either is how a wrong number gets recorded.
+  const linked = linkRows([srow('Bob', 'Yellow')], sideRoster);
+  const [row] = applySides(linked, { Yellow: 'A', Red: 'B' }, sideRoster);
+  assert.ok(row.side_conflict);
+  assert.strictEqual(row.match_note, 'side-conflict');
+  assert.strictEqual(row.team_id, 'A', 'the colour wins the assignment');
+});
+
+test('a row with no readable colour keeps the team its name gave it', () => {
+  const linked = linkRows([srow('Ann', '')], sideRoster);
+  const [row] = applySides(linked, { Yellow: 'A', Red: 'B' }, sideRoster);
+  assert.strictEqual(row.team_id, 'A');
+  assert.ok(!row.side_conflict);
+});
+
+test('the candidate list is only the side that row played on', () => {
+  // Offering the other roster is offering a hundred wrong answers.
+  const sides = { Yellow: 'A', Red: 'B' };
+  const yellow = candidatesFor(srow('x', 'Yellow'), sideRoster, sides);
+  assert.deepStrictEqual(yellow.map((p) => p.player_name), ['Ann', 'Abe']);
+  const red = candidatesFor(srow('x', 'Red'), sideRoster, sides);
+  assert.deepStrictEqual(red.map((p) => p.player_name), ['Bob', 'Bea']);
+});
+
+test('with the sides unknown, every player is still offered', () => {
+  const all = candidatesFor(srow('x', 'Yellow'), sideRoster, { Yellow: null, Red: null });
+  assert.strictEqual(all.length, 4);
+});

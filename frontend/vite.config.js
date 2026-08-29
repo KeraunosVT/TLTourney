@@ -39,7 +39,7 @@ export default defineConfig({
     // module works under `vite dev` too, not only in a production build.
     include: [
       '@shared/classes.cjs', '@shared/roles.cjs',
-      '@shared/captains.cjs', '@shared/board.cjs',
+      '@shared/captains.cjs', '@shared/board.cjs', '@shared/scoreboard.cjs',
     ],
     entries: ['src/**/*.jsx'],
   },

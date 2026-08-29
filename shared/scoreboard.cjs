@@ -84,6 +84,107 @@ function linkSummary(linked) {
   };
 }
 
+// ── Which side was which ────────────────────────────────────────────────────
+/**
+ * Work out which of the two teams played Yellow and which played Red.
+ *
+ * The scoreboard splits everybody into two colours, and until now that column
+ * was stored and used for nothing — each row's team came from whichever roster
+ * its NAME matched. That is backwards. A scoreboard row belongs to a side
+ * because of the side it was on, and the name only says which person it is.
+ *
+ * Reading it the other way round costs the case that actually matters: a
+ * mismatched or mis-OCR'd name silently put somebody on the wrong team, and
+ * nothing on the page disagreed with itself.
+ *
+ * The mapping is INFERRED by vote rather than assumed, because nothing on the
+ * screenshot says "Yellow is The Hamstars" — only the players do. Every
+ * confidently matched row is a vote for its colour belonging to its roster's
+ * team, and the majority wins. The organizer can override it either way.
+ *
+ * Returns { sides: { Yellow, Red }, votes, confident }.
+ */
+function inferSides(rows, roster) {
+  const teamOf = new Map((roster || []).map((p) => [p.id, p.team_id]));
+  const votes = { Yellow: {}, Red: {} };
+
+  (rows || []).forEach((r) => {
+    const colour = r.team_color;
+    const team = teamOf.get(r.signup_id);
+    if (!votes[colour] || !team) return;
+    votes[colour][team] = (votes[colour][team] || 0) + 1;
+  });
+
+  const winner = (colour) => {
+    const tally = Object.entries(votes[colour]);
+    if (!tally.length) return null;
+    tally.sort((a, b) => b[1] - a[1]);
+    // A tie is not an answer. Two teams with equal votes for one colour means
+    // the read is too confused to guess from, and guessing would put half a
+    // roster on the wrong side.
+    if (tally.length > 1 && tally[0][1] === tally[1][1]) return null;
+    return tally[0][0];
+  };
+
+  let Yellow = winner('Yellow');
+  let Red = winner('Red');
+
+  // Both colours cannot be the same team. If the votes say so, the weaker
+  // reading loses its answer rather than both being wrong.
+  if (Yellow && Yellow === Red) {
+    const yStrength = votes.Yellow[Yellow] || 0;
+    const rStrength = votes.Red[Red] || 0;
+    if (yStrength >= rStrength) Red = null; else Yellow = null;
+  }
+
+  // One side known is enough to place the other, since a match has exactly two.
+  const teams = [...new Set([...teamOf.values()].filter(Boolean))];
+  if (teams.length === 2) {
+    if (Yellow && !Red) Red = teams.find((t) => t !== Yellow) || null;
+    if (Red && !Yellow) Yellow = teams.find((t) => t !== Red) || null;
+  }
+
+  return {
+    sides: { Yellow, Red },
+    votes,
+    confident: !!(Yellow && Red && Yellow !== Red),
+  };
+}
+
+/**
+ * Put every row on the side its COLOUR says, and flag the rows that argue.
+ *
+ * `team_id` now comes from the colour. Where the matched person's roster
+ * disagrees with it, the row is flagged rather than quietly corrected: one of
+ * the two readings is wrong — a misread colour or a misread name — and which
+ * one it is takes a human looking at the screenshot.
+ */
+function applySides(rows, sides, roster) {
+  const teamOf = new Map((roster || []).map((p) => [p.id, p.team_id]));
+
+  return (rows || []).map((r) => {
+    const fromColour = sides?.[r.team_color] || null;
+    const fromRoster = teamOf.get(r.signup_id) || null;
+    const conflict = !!(fromColour && fromRoster && fromColour !== fromRoster);
+
+    return {
+      ...r,
+      // Colour first. A row with no readable colour keeps whatever the name
+      // gave it, which is better than nothing and is visible as "no side".
+      team_id: fromColour || fromRoster,
+      side_conflict: conflict,
+      match_note: conflict ? 'side-conflict' : r.match_note,
+    };
+  });
+}
+
+/** Candidates for a row: only the side it played on, when that is known. */
+function candidatesFor(row, roster, sides) {
+  const team = sides?.[row.team_color] || null;
+  if (!team) return roster || [];
+  return (roster || []).filter((p) => p.team_id === team);
+}
+
 // ── Many screenshots, one scoreboard ────────────────────────────────────────
 /**
  * Merge the pages of a paginated scoreboard into a single set of rows.
@@ -322,5 +423,6 @@ function rank(entries, by = 'damage_dealt') {
 }
 
 module.exports = {
-  normalizeName, linkRows, linkSummary, mergePages, playerProfile, leaderboard, rank, SORTS, isSort,
+  normalizeName, linkRows, linkSummary, mergePages, inferSides, applySides, candidatesFor,
+  playerProfile, leaderboard, rank, SORTS, isSort,
 };

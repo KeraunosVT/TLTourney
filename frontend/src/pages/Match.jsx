@@ -14,6 +14,7 @@ import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Note, Empty } from '../components/ui';
 import { useAuth } from '../auth';
 import { WEAPONS } from '@shared/classes.cjs';
+import { applySides, candidatesFor } from '@shared/scoreboard.cjs';
 
 // 3254684 → "3.25M". A scoreboard is a wall of seven-digit numbers, and nobody
 // reads them digit by digit — they compare them.
@@ -103,6 +104,15 @@ export default function Match() {
     rows: prev.rows.map((r, n) => (n === i ? { ...r, ...fields } : r)),
   }));
 
+  // Changing which team played which colour re-teams EVERY row, including the
+  // ones whose name matched nobody. That is the point of the colour deciding
+  // it rather than the name.
+  const setSides = (sides) => setReview((prev) => ({
+    ...prev,
+    sides,
+    rows: applySides(prev.rows, sides, prev.roster),
+  }));
+
   if (loading) return <div className="p-8 text-sm text-ash">Loading…</div>;
   if (!data?.match) {
     return (
@@ -186,6 +196,7 @@ export default function Match() {
           review={review}
           busy={busy}
           onPatch={patch}
+          onSides={setSides}
           onRemove={(i) => setReview((p) => ({ ...p, rows: p.rows.filter((_, n) => n !== i) }))}
           onCancel={() => setReview(null)}
           onCommit={commit}
@@ -202,15 +213,13 @@ export default function Match() {
 }
 
 // ── The review ──────────────────────────────────────────────────────────────
-function Review({ review, busy, onPatch, onRemove, onCancel, onCommit }) {
+function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }) {
   const live = useMemo(() => ({
     total: review.rows.length,
     matched: review.rows.filter((r) => r.signup_id).length,
   }), [review.rows]);
 
-  // Who each row could be. One list for both teams, labelled by team, because
-  // an organizer fixing a row knows the name and not which side it was on.
-  const options = review.roster || [];
+  const roster = review.roster || [];
 
   return (
     <Panel
@@ -223,6 +232,43 @@ function Review({ review, busy, onPatch, onRemove, onCancel, onCommit }) {
         </span>
       }
     >
+      {/* Which team played which colour. Inferred from the rows that matched
+          confidently, and overridable — nothing on a screenshot says "Yellow is
+          The Hamstars", only the players do. */}
+      <div className="px-4 py-3 border-b border-line flex items-center gap-4 flex-wrap">
+        {['Yellow', 'Red'].map((colour) => (
+          <label key={colour} className="flex items-center gap-2">
+            <span
+              className={`text-[11px] uppercase tracking-[0.12em] font-semibold ${
+                colour === 'Yellow' ? 'text-[#d8b657]' : 'text-crimsonbright'
+              }`}
+            >
+              {colour}
+            </span>
+            <select
+              className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px]
+                         outline-none focus:border-crimson"
+              value={review.sides?.[colour] || ''}
+              onChange={(e) => onSides({ ...review.sides, [colour]: e.target.value || null })}
+            >
+              <option value="">— not set —</option>
+              {(review.teams || []).map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+        <button
+          onClick={() => onSides({ Yellow: review.sides?.Red || null, Red: review.sides?.Yellow || null })}
+          className="text-[11.5px] text-ash hover:text-bone underline underline-offset-2"
+        >
+          swap
+        </button>
+        <span className="text-[11.5px] text-ash">
+          The colour decides which team each row counts for — including rows whose name matched nobody.
+        </span>
+      </div>
+
       {review.files?.length > 1 && (
         <div className="px-4 py-2.5 border-b border-line flex flex-wrap gap-x-4 gap-y-1">
           {review.files.map((f) => (
@@ -262,9 +308,21 @@ function Review({ review, busy, onPatch, onRemove, onCancel, onCommit }) {
             {review.rows.map((r, i) => (
               <tr
                 key={`${r.player_name}-${i}`}
-                className={`border-t border-line/50 ${r.signup_id ? '' : 'bg-crimson/[0.06]'}`}
+                className={`border-t border-line/50 ${
+                  r.side_conflict ? 'bg-oxblood/25' : r.signup_id ? '' : 'bg-crimson/[0.06]'
+                }`}
               >
-                <td className="px-2 py-1.5 mono text-ash">{r.rank || '—'}</td>
+                <td className="px-2 py-1.5 mono text-ash whitespace-nowrap">
+                  {r.rank || '—'}
+                  <span
+                    className={`ml-1.5 text-[9px] uppercase ${
+                      r.team_color === 'Yellow' ? 'text-[#d8b657]'
+                        : r.team_color === 'Red' ? 'text-crimsonbright' : 'text-dim'
+                    }`}
+                  >
+                    {r.team_color ? r.team_color[0] : '?'}
+                  </span>
+                </td>
                 <td className="px-2 py-1.5">
                   <input
                     className="w-full bg-panelup border border-line rounded px-1.5 py-1 text-[12.5px]
@@ -287,13 +345,21 @@ function Review({ review, busy, onPatch, onRemove, onCancel, onCommit }) {
                         genuinely nobody's: opponents, spectators, a guild that
                         wandered through. Those must be saveable as such. */}
                     <option value="">— not one of these teams —</option>
-                    {options.map((o) => (
+                    {/* Only the side this row played on. A Yellow row cannot
+                        be a Red player, so offering the other roster is
+                        offering a hundred wrong answers. */}
+                    {candidatesFor(r, roster, review.sides).map((o) => (
                       <option key={o.id} value={o.id}>{o.player_name}</option>
                     ))}
                   </select>
                   {r.match_note === 'ambiguous' && (
                     <div className="text-[10px] text-crimsonbright mt-0.5">
                       two players share this name — pick one
+                    </div>
+                  )}
+                  {r.side_conflict && (
+                    <div className="text-[10px] text-crimsonbright mt-0.5">
+                      this name is on the other team — check the colour or the name
                     </div>
                   )}
                 </td>

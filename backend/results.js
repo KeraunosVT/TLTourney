@@ -24,7 +24,8 @@ const { supabase, currentTournament, audit } = require('./db');
 const { parseScreenshot, parseCsv } = require('./ingest');
 const { rostersByTeam } = require('./teams');
 const {
-  linkRows, linkSummary, mergePages, playerProfile, leaderboard, rank, SORTS, isSort,
+  linkRows, linkSummary, mergePages, inferSides, applySides,
+  playerProfile, leaderboard, rank, SORTS, isSort,
 } = require('../shared/scoreboard.cjs');
 const { classify } = require('../shared/classes.cjs');
 
@@ -243,7 +244,14 @@ organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req
     return res.status(500).json({ error: 'Could not read the rosters to match names against.' });
   }
 
-  const linked = linkRows(merged.rows, roster);
+  const named = linkRows(merged.rows, roster);
+
+  // Which colour was which team, voted for by the rows that matched confidently.
+  // Then the COLOUR decides each row's team — including for rows whose name
+  // matched nobody, which is the case this earns its keep on: an unmatched row
+  // still belongs to a side, and the side is on the screenshot.
+  const { sides, confident } = inferSides(named, roster);
+  const linked = applySides(named, sides, roster);
 
   const warnings = [
     ...failed.map((p) => `${p.name} could not be read: ${p.error}`),
@@ -257,9 +265,28 @@ organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req
     ...[...new Set(pages.flatMap((p) => p.warnings || []))],
   ];
 
+  const sideConflicts = linked.filter((r) => r.side_conflict).length;
+  if (sideConflicts) {
+    warnings.push(
+      `${sideConflicts} row(s) are on a colour that disagrees with the team their name belongs to `
+      + '— either the name or the colour was misread, so check those first.'
+    );
+  }
+  if (!confident) {
+    warnings.push(
+      'Could not tell which team played Yellow and which played Red from the names — set it above the table.'
+    );
+  }
+
+  const { data: teamRows } = await supabase.from('teams')
+    .select('id, name, tag').in('id', [match.team_a_id, match.team_b_id]);
+
   res.json({
     rows: linked.map((r) => ({ ...r, class: classify(r.weapon_1, r.weapon_2) })),
     summary: linkSummary(linked),
+    sides,
+    sidesConfident: confident,
+    teams: teamRows || [],
     warnings,
     files: pages.map((p) => ({ name: p.name, rows: p.players.length, error: p.error || null })),
     usedLegend: pages.find((p) => p.usedLegend !== undefined)?.usedLegend ?? null,
