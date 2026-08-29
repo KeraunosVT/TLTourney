@@ -19,6 +19,7 @@ const teams = require('./teams');
 const board = require('./board');
 const draft = require('./draft');
 const bracket = require('./bracket');
+const results = require('./results');
 const { currentTournament, supabase } = require('./db');
 
 const app = express();
@@ -146,9 +147,16 @@ app.use('/api/board', (req, res, next) => (req.method === 'GET' ? next() : board
 app.use('/api/draft', (req, res, next) => (req.method === 'GET' ? next() : boardLimiter(req, res, next)), draft.router);
 
 app.use('/api/bracket', bracket.router);
+app.use('/api/stats', results.router);
 
 app.use('/api/organizer/teams', requireOrganizer, teams.organizerRouter);
 app.use('/api/organizer/bracket', requireOrganizer, bracket.organizerRouter);
+
+// Scoreboard upload carries a file, so it is exempt from the 64kb JSON body
+// limit set above — multer handles the multipart body and caps it at 12MB
+// itself. The commit is plain JSON and is not exempt: a reviewed scoreboard is
+// a few dozen small rows.
+app.use('/api/organizer/results', requireOrganizer, results.organizerRouter);
 app.use('/api/organizer/draft', requireOrganizer, draft.organizerRouter);
 app.use('/api/organizer', requireOrganizer, organizerRouter);
 

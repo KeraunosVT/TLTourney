@@ -7,6 +7,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "@google/genai": "^2.19.0",
     "@supabase/supabase-js": "^2.105.1",
     "axios": "^1.17.0",
     "cookie-parser": "^1.4.7",
@@ -14,6 +15,8 @@
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "express-rate-limit": "^8.5.2",
-    "jsonwebtoken": "^9.0.3"
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.3.0",
+    "papaparse": "^5.7.0"
   }
 }

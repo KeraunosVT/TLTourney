@@ -12,7 +12,8 @@ const { supabase, currentTournament, audit } = require('./db');
 const { generateBracket, applyResult, roundLabel } = require('../shared/bracket.cjs');
 
 const COLS = 'id, key, bracket, round, idx, slot_a, slot_b, team_a_id, team_b_id, '
-  + 'winner_team_id, loser_team_id, kind, advances, status, is_reset, scheduled_at, decided_at, decided_by';
+  + 'winner_team_id, loser_team_id, kind, advances, status, is_reset, scheduled_at, '
+  + 'decided_at, decided_by, scoreboard_at';
 
 const TEAM = 'id, name, tag, seed';
 

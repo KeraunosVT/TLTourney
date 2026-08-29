@@ -10,6 +10,7 @@
 // enough to read at a glance and it costs no connector-line arithmetic that
 // would need redoing for every bye and every bracket size.
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Note, Field } from '../components/ui';
 import { useAuth } from '../auth';
@@ -166,7 +167,15 @@ function MatchCard({ m, onPick, canRecord, busy }) {
   return (
     <div className={`rounded border bg-panelup/60 ${border} ${dormant ? 'opacity-40' : ''}`}>
       <div className="px-2 py-1 border-b border-line/50 flex items-center justify-between gap-2">
-        <span className="mono text-[10px] text-ash">{m.key}</span>
+        {/* The key doubles as the way into the match's scoreboard — the only
+            place a result gets its detail, and where an organizer uploads it. */}
+        <Link
+          to={`/match/${encodeURIComponent(m.key)}`}
+          className="mono text-[10px] text-ash hover:text-crimsonbright underline underline-offset-2"
+        >
+          {m.key}
+        </Link>
+        {m.scoreboard_at && <span className="text-[9px] uppercase tracking-[0.1em] text-verdigris">stats</span>}
         {m.kind === 'walkover' && <span className="text-[9px] uppercase tracking-[0.1em] text-ash">bye</span>}
         {m.status === 'ready' && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">ready</span>}
         {m.is_reset && !dormant && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">reset</span>}

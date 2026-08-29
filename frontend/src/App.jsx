@@ -11,6 +11,9 @@ import Teams from './pages/Teams';
 import Board from './pages/Board';
 import Draft from './pages/Draft';
 import Bracket from './pages/Bracket';
+import Match from './pages/Match';
+import Leaderboard from './pages/Leaderboard';
+import Player from './pages/Player';
 import Watch from './pages/Watch';
 import Pool from './pages/Pool';
 
@@ -50,6 +53,7 @@ function Shell() {
               page. */}
           <NavLink to="/draft" className={link}>Draft</NavLink>
           <NavLink to="/bracket" className={link}>Bracket</NavLink>
+          <NavLink to="/leaderboard" className={link}>Leaderboard</NavLink>
           {/* Only a captain has one, so only a captain is offered one. The
               server refuses it either way — this just keeps a dead link off
               everyone else's rail. */}
@@ -138,6 +142,9 @@ export default function App() {
               <Route path="/signup" element={<Signup />} />
               <Route path="/draft" element={<Draft />} />
               <Route path="/bracket" element={<Bracket />} />
+              <Route path="/match/:key" element={<Match />} />
+              <Route path="/leaderboard" element={<Leaderboard />} />
+              <Route path="/player/:signupId" element={<Player />} />
               <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />
               <Route path="/queue" element={<OrganizerOnly><Queue /></OrganizerOnly>} />
               <Route path="/teams" element={<OrganizerOnly><Teams /></OrganizerOnly>} />

@@ -313,4 +313,45 @@ select '011 · every recorded winner actually played that match',
        not exists (select 1 from matches
                    where winner_team_id is not null
                      and winner_team_id not in (coalesce(team_a_id, winner_team_id),
-                                                coalesce(team_b_id, winner_team_id)));
+                                                coalesce(team_b_id, winner_team_id)))
+union all
+-- ── 012 ────────────────────────────────────────────────────────────────────
+select '012 · player_match_stats table',
+       to_regclass('public.player_match_stats') is not null
+union all
+-- THE one that protects every number in the tournament. Without it, uploading
+-- the same scoreboard twice doubles everybody's totals — and the totals stay
+-- entirely plausible while being exactly wrong.
+select '012 · one row per player per match',
+       exists (select 1 from pg_indexes
+               where schemaname = 'public' and indexname = 'pms_one_row_per_player_per_match')
+union all
+select '012 · stats cannot be negative',
+       exists (select 1 from pg_constraint where conname = 'pms_stats_not_negative')
+union all
+-- A tournament's damage totals clear int4's 2.1 billion without much trouble,
+-- and the overflow would arrive mid-commit.
+select '012 · damage and healing are bigint, not int',
+       (select count(*) = 3 from information_schema.columns
+         where table_schema = 'public' and table_name = 'player_match_stats'
+           and column_name in ('damage_dealt', 'damage_taken', 'healing')
+           and data_type = 'bigint')
+union all
+select '012 · matches.scoreboard_at column',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'matches'
+                 and column_name = 'scoreboard_at')
+union all
+-- Statistics are attributed by id, never by name. A row pointing at a signup
+-- from another tournament would put somebody else's night on a profile.
+select '012 · every attributed row points at a real signup',
+       not exists (select 1 from player_match_stats s
+                   where s.signup_id is not null
+                     and not exists (select 1 from player_signups p
+                                      where p.id = s.signup_id
+                                        and p.tournament_id = s.tournament_id))
+union all
+select '012 · a match marked as having a scoreboard has one',
+       not exists (select 1 from matches m
+                   where m.scoreboard_at is not null
+                     and not exists (select 1 from player_match_stats s where s.match_id = m.id));
