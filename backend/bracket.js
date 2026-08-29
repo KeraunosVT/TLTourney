@@ -12,6 +12,7 @@ const { supabase, currentTournament, audit } = require('./db');
 const { generateBracket, applyResult, roundLabel } = require('../shared/bracket.cjs');
 const { seriesResult, gameSlots, isBestOf } = require('../shared/series.cjs');
 const { isMap, available, isPlayable } = require('../shared/maps.cjs');
+const { classify } = require('../shared/classes.cjs');
 
 const COLS = 'id, key, bracket, round, idx, slot_a, slot_b, team_a_id, team_b_id, '
   + 'winner_team_id, loser_team_id, kind, advances, status, is_reset, scheduled_at, '
@@ -194,6 +195,100 @@ async function bracketState(tournamentId) {
     })(),
   };
 }
+
+// ── The stream ──────────────────────────────────────────────────────────────
+// No session, like the draft's stream route and for the same reasons: OBS
+// carries no cookie, and a bracket is the thing being broadcast.
+//
+// What travels: teams, matches, series scores, maps, bans, schedule, and one
+// match's scoreboard. What does not: signup ids, Discord handles, signup notes.
+// A scoreboard row here carries the same fields the draft's pick feed already
+// makes public — an in-game name, a class and the numbers off the screen.
+const streamRouter = express.Router();
+
+const castRow = (r) => ({
+  rank: r.rank,
+  player_name: r.player_name,
+  team_id: r.team_id,
+  team_color: r.team_color,
+  class: classify(r.weapon_1, r.weapon_2),
+  kills: r.kills,
+  assists: r.assists,
+  damage_dealt: Number(r.damage_dealt) || 0,
+  damage_taken: Number(r.damage_taken) || 0,
+  healing: Number(r.healing) || 0,
+});
+
+/**
+ * Which match the broadcast is about.
+ *
+ * A producer can name one with ?match=W2-0. Otherwise it picks the one a
+ * viewer would expect: something being played now, failing that the next thing
+ * scheduled, failing that the last thing finished. Never nothing, while the
+ * bracket has anything in it at all — a scene that goes blank between matches
+ * is a scene somebody has to babysit.
+ */
+function featured(matches, asked) {
+  const real = matches.filter((m) => m.kind === 'match');
+  if (asked) {
+    const named = real.find((m) => m.key === asked);
+    if (named) return named;
+  }
+
+  const live = real.filter((m) => m.status === 'ready');
+  if (live.length) {
+    // The one with a time, soonest first; a scheduled match beats an unplayed
+    // one that nobody has committed to yet.
+    const timed = live.filter((m) => m.scheduled_at)
+      .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+    return timed[0] || live[0];
+  }
+
+  const done = real.filter((m) => m.status === 'complete' && m.decided_at)
+    .sort((a, b) => new Date(b.decided_at) - new Date(a.decided_at));
+  return done[0] || real[0] || null;
+}
+
+streamRouter.get('/', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.json({ exists: false, matches: [], teams: [] });
+
+  try {
+    const state = await bracketState(t.id);
+    const focus = featured(state.matches, String(req.query.match || ''));
+
+    let rows = [];
+    let game = null;
+    if (focus) {
+      // The newest game that actually has a scoreboard — during a series that
+      // is the one just played, which is what a broadcast is talking about.
+      game = [...(focus.games || [])]
+        .filter((g) => g.scoreboard_at)
+        .sort((a, b) => b.game_number - a.game_number)[0] || null;
+
+      if (game) {
+        const { data } = await supabase.from('player_match_stats')
+          .select('rank, player_name, team_id, team_color, weapon_1, weapon_2, kills, assists, damage_dealt, damage_taken, healing')
+          .eq('game_id', game.id).order('rank', { ascending: true });
+        rows = (data || []).map(castRow);
+      }
+    }
+
+    res.json({
+      tournament: { name: t.name, status: t.status },
+      ...state,
+      serverTime: new Date().toISOString(),
+      focus: focus ? { ...focus, scoreboard: rows, scoreboardGame: game?.game_number ?? null } : null,
+    });
+  } catch (err) {
+    console.error('stream bracket read failed:', err.message);
+    if (/schema cache|does not exist|relation/i.test(err.message)) {
+      return res.status(503).json({ error: 'The bracket tables are missing — run migrations 011 to 014.' });
+    }
+    res.status(500).json({ error: 'Could not read the bracket.' });
+  }
+});
 
 // ── Public: anyone signed in ────────────────────────────────────────────────
 const router = express.Router();
@@ -819,4 +914,4 @@ organizerRouter.delete('/', async (req, res) => {
   res.json({ ok: true, exists: false, matches: [], teams: [] });
 });
 
-module.exports = { router, organizerRouter, bracketState, settle };
+module.exports = { router, streamRouter, organizerRouter, bracketState, settle, featured };

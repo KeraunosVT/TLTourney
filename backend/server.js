@@ -103,6 +103,7 @@ const streamLimiter = rateLimit({
   message: { error: 'Too many requests — slow down.' },
 });
 app.use('/api/stream/draft', streamLimiter, draft.publicRouter);
+app.use('/api/stream/bracket', streamLimiter, bracket.streamRouter);
 
 // ── Everything below needs a session ────────────────────────────────────────
 app.use('/api', requireAuth);

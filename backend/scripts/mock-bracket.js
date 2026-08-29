@@ -333,6 +333,31 @@ const okCall = (r, what) => {
     ok(entry?.games === 1 && entry?.matches === 1, `one game, one match (got ${entry?.games}/${entry?.matches})`);
     ok(entry?.damage_dealt === rows[0].damage_dealt, 'with the damage they actually did');
 
+    // ── The broadcast scene ─────────────────────────────────────────────────
+    step('The stream endpoint');
+    const cast = okCall(await call(bracket.streamRouter, 'GET', '/', { query: {} }), 'stream bracket');
+    ok(cast.exists && cast.matches.length > 0, `${cast.matches.length} matches on the public route`);
+    ok(!!cast.focus, `it picked a match to feature (${cast.focus?.key})`);
+    // The featured match is whichever one a viewer would expect — something
+    // live, else the most recently decided — which is NOT necessarily the one
+    // this script happened to score. Ask for that one by name to check the
+    // scoreboard travels with it.
+    const cast2 = okCall(await call(bracket.streamRouter, 'GET', '/', { query: { match: scored.key } }),
+      'stream bracket ?match=scored');
+    ok((cast2.focus?.scoreboard || []).length === rows.length,
+      `the scored match carries its scoreboard (${cast2.focus?.scoreboard?.length} rows)`);
+    ok(cast2.focus?.scoreboardGame === gameNo, `and says which game it is (${cast2.focus?.scoreboardGame})`);
+
+    // Nothing identifying may reach an unauthenticated route.
+    const leaked = new Set();
+    const bannedKeys = ['signup_id', 'discord_id', 'discord_username', 'notes'];
+    JSON.stringify(cast, (k, v) => { if (bannedKeys.includes(k)) leaked.add(k); return v; });
+    ok(leaked.size === 0, leaked.size ? `LEAKED ${[...leaked].join(', ')}` : 'and no identifying fields');
+
+    const named = okCall(await call(bracket.streamRouter, 'GET', '/', { query: { match: toSchedule.key } }),
+      'stream bracket ?match=');
+    ok(named.focus?.key === toSchedule.key, 'a producer can name the featured match');
+
     completed = true;
   } catch (err) {
     // Caught rather than propagated, so the cleanup below still runs — leaving

@@ -14,9 +14,12 @@
 //   · four things visible at once and no more: who is picking, how long they
 //     have, who was just taken, and who is next. Anything else is for the
 //     people IN the draft, and they have their own page.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import axios from 'axios';
 import { Sigil } from '../components/Brand';
 import PoolPanel from '../components/PoolPanel';
+import BracketScene from '../components/BracketScene';
+import MatchScene from '../components/MatchScene';
 import { useCountdown, mmss } from '../lib/clock';
 import { useStreamDraft } from '../lib/stream';
 
@@ -32,7 +35,16 @@ export default function Watch() {
   const [rail, setRail] = useState(() =>
     new URLSearchParams(window.location.search).get('pool') !== '0');
 
+  // ── Which scene ───────────────────────────────────────────────────────────
+  // 'auto' follows the tournament: the draft while it is running, the bracket
+  // once it is not. A producer overrides with ?scene= or the number keys,
+  // because "what is happening" and "what I want on screen right now" are not
+  // the same question — a replay segment wants the bracket up mid-draft.
+  const [scene, setScene] = useState(() =>
+    new URLSearchParams(window.location.search).get('scene') || 'auto');
+
   const { state, failed } = useStreamDraft(rail);
+  const [bracket, setBracket] = useState(null);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -42,10 +54,35 @@ export default function Watch() {
         return;
       }
       if (e.key === 'a' || e.key === 'A') setRail((v) => !v);
+      if (e.key === '1') setScene('draft');
+      if (e.key === '2') setScene('bracket');
+      if (e.key === '3') setScene('match');
+      if (e.key === '0') setScene('auto');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // The bracket poll runs alongside the draft's rather than instead of it, so
+  // switching scenes is instant. Slower, because a bracket changes when a match
+  // is decided — a few times a night, not every two seconds.
+  const bracketFetch = useCallback(async () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const which = params.get('match');
+      const { data } = await axios.get(`/api/stream/bracket${which ? `?match=${encodeURIComponent(which)}` : ''}`);
+      setBracket(data);
+    } catch {
+      // A bracket that has not been drawn yet 503s or comes back empty. The
+      // scene says so; it is not an error worth putting on a broadcast.
+    }
+  }, []);
+
+  useEffect(() => {
+    bracketFetch();
+    const id = setInterval(bracketFetch, 10000);
+    return () => clearInterval(id);
+  }, [bracketFetch]);
 
   const d = state?.draft;
   const left = useCountdown(d?.deadline, d?.serverTime);
@@ -63,6 +100,12 @@ export default function Watch() {
     );
   }
 
+  // 'auto' means: the draft while it is running, the bracket once it is not.
+  // A bracket that has not been drawn keeps the draft up rather than showing an
+  // empty frame — the last useful thing beats a blank one.
+  const drafting = d?.status === 'live' || d?.status === 'paused';
+  const showing = scene !== 'auto' ? scene : (drafting || !bracket?.exists ? 'draft' : 'bracket');
+
   const teams = state.teams || [];
   const byId = Object.fromEntries(teams.map((t) => [t.id, t]));
   const onClock = byId[d?.onClock];
@@ -70,7 +113,7 @@ export default function Watch() {
 
   return (
     <Stage
-      rail={rail && (
+      rail={rail && showing === 'draft' && (
         <aside className="w-[26vw] min-w-[300px] max-w-[460px] shrink-0 border-l border-line
                           bg-panel/60 flex flex-col min-h-0">
           {/* The em the whole panel is sized from. A viewport unit here because
@@ -97,14 +140,41 @@ export default function Watch() {
         </div>
 
         <div className="ml-auto flex items-baseline gap-[2.5vw] mono">
-          {d?.round != null && d.status !== 'complete' && (
+          {/* Draft numbers belong to the draft scene. Leaving "Pick 27 / 464"
+              above a bracket is a caption for a different broadcast. */}
+          {showing === 'draft' && d?.round != null && d.status !== 'complete' && (
             <Stat label="Round" value={`${d.round} / ${d.rounds}`} />
           )}
-          <Stat label="Pick" value={d?.status === 'complete' ? d.totalPicks : `${d?.currentPick} / ${d?.totalPicks}`} />
-          <Stat label="Pool" value={state.poolCount ?? '—'} />
+          {showing === 'draft' && (
+            <Stat label="Pick" value={d?.status === 'complete' ? d.totalPicks : `${d?.currentPick} / ${d?.totalPicks}`} />
+          )}
+          {showing === 'draft' && <Stat label="Pool" value={state.poolCount ?? '—'} />}
+          {showing !== 'draft' && bracket?.counts && (
+            <Stat label="Played" value={`${bracket.counts.complete} / ${bracket.counts.total}`} />
+          )}
+          {showing !== 'draft' && bracket?.champion && (
+            <Stat label="Champion" value={bracket.champion.tag || bracket.champion.name} />
+          )}
         </div>
       </header>
 
+      {showing === 'bracket' && bracket?.exists && <BracketScene state={bracket} />}
+
+      {showing === 'match' && bracket?.exists && (
+        <MatchScene
+          focus={bracket.focus}
+          teams={new Map((bracket.teams || []).map((t) => [t.id, t]))}
+        />
+      )}
+
+      {(showing === 'bracket' || showing === 'match') && !bracket?.exists && (
+        <div className="flex-1 grid place-items-center">
+          <div className="text-[2.4vh] text-ash">The bracket has not been drawn yet.</div>
+        </div>
+      )}
+
+      {showing === 'draft' && (
+      <>
       {/* ── The two things that matter ─────────────────────────────────── */}
       <section className="grid grid-cols-1 lg:grid-cols-[1.15fr_1fr] gap-[2vw] px-[2.5vw] py-[2.2vh] shrink-0">
         <OnClock draft={d} team={onClock} left={left} />
@@ -137,17 +207,34 @@ export default function Watch() {
           ))}
         </div>
       </section>
+      </>
+      )}
 
       {/* Revealed by a mouse, and only by a mouse. OBS has no cursor, so this
           never appears in the capture. */}
-      <button
-        onClick={() => setRail((v) => !v)}
-        className="fixed bottom-[1.5vh] left-[1.5vw] px-[0.8vw] py-[0.6vh] rounded border border-line
-                   bg-panel text-ash text-[1.2vh] opacity-0 hover:opacity-100 focus:opacity-100
-                   transition-opacity"
-      >
-        {rail ? 'Hide available players (A)' : 'Show available players (A)'}
-      </button>
+      <div className="fixed bottom-[1.5vh] left-[1.5vw] flex gap-[0.5vw] opacity-0 hover:opacity-100
+                      focus-within:opacity-100 transition-opacity">
+        {[['auto', 'Auto (0)'], ['draft', 'Draft (1)'], ['bracket', 'Bracket (2)'], ['match', 'Match (3)']]
+          .map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setScene(id)}
+              className={`px-[0.7vw] py-[0.6vh] rounded border text-[1.2vh] ${
+                scene === id ? 'border-crimson text-crimsonbright bg-crimson/15' : 'border-line bg-panel text-ash'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        {showing === 'draft' && (
+          <button
+            onClick={() => setRail((v) => !v)}
+            className="px-[0.7vw] py-[0.6vh] rounded border border-line bg-panel text-ash text-[1.2vh]"
+          >
+            {rail ? 'Hide players (A)' : 'Show players (A)'}
+          </button>
+        )}
+      </div>
 
     </Stage>
   );
