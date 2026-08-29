@@ -75,7 +75,53 @@ function roleDemand(template, teamCount = 1) {
 const startersPerTeam = (template) =>
   template.reduce((n, p) => n + (p.slots || []).length, 0);
 
+// ── Changing the shape of a team ────────────────────────────────────────────
+/**
+ * Reshape a template to a new party count and party size.
+ *
+ * THE TEMPLATE AND THE NUMBERS HAVE TO MOVE TOGETHER. `roster_size` is
+ * generated as party_count * party_size + sub_count, while every readiness and
+ * scarcity figure is counted off the TEMPLATE — so the two are two descriptions
+ * of one thing and there is nothing to catch them disagreeing.
+ *
+ * Half of that is enforced: a CHECK pins party_count to the template's length,
+ * which is why party_count could not be changed at all through the API. The
+ * other half is not, and party_size could be changed on its own — leaving a
+ * roster of 52 beside a template describing 48 starters, with every role
+ * requirement quietly computed from the wrong one.
+ *
+ * PRESERVES what is there. Somebody who has tuned party 1 to two tanks and two
+ * healers should not lose that because they added a ninth party. Parties are
+ * appended or dropped from the END, and slots likewise.
+ *
+ * Added slots are 'Any Role' rather than a guess. A slot type is a CONSTRAINT —
+ * 'Tank' means only a tank may fill it — and inventing a requirement nobody
+ * asked for makes a roster look short of tanks that were never needed.
+ */
+const FLEX_PARTY = ['Tank', 'Any Role', 'DPS', 'DPS', 'Healer', 'Healer'];
+
+function resizeTemplate(template, partyCount, partySize) {
+  const source = Array.isArray(template) ? template : [];
+  const out = [];
+
+  for (let i = 0; i < partyCount; i++) {
+    const existing = source[i];
+    const slots = [...((existing?.slots) || FLEX_PARTY)].slice(0, partySize);
+    // Pad with the least committal slot there is.
+    while (slots.length < partySize) slots.push('Any Role');
+    out.push({ name: existing?.name || 'Flex', slots });
+  }
+
+  return out;
+}
+
+/** Does this template describe exactly this shape? */
+const templateFits = (template, partyCount, partySize) =>
+  Array.isArray(template)
+  && template.length === partyCount
+  && template.every((p) => (p.slots || []).length === partySize);
+
 module.exports = {
-  SLOT_TYPES, SLOT_NAMES, DEFAULT_PARTY_TEMPLATE,
-  canFill, roleDemand, startersPerTeam,
+  SLOT_TYPES, SLOT_NAMES, DEFAULT_PARTY_TEMPLATE, FLEX_PARTY,
+  canFill, roleDemand, startersPerTeam, resizeTemplate, templateFits,
 };

@@ -5,6 +5,7 @@
 const express = require('express');
 const { supabase, currentTournament, invalidateTournament, audit } = require('./db');
 const { sendDM, listRoles, fetchMember, botConfigured } = require('./discord');
+const { resizeTemplate, templateFits, SLOT_NAMES } = require('../shared/parties.cjs');
 
 const router = express.Router();
 
@@ -231,6 +232,42 @@ router.put('/tournament', async (req, res) => {
     }
     patch[key] = n;
   }
+  // An explicit template, if one was sent. Validated slot by slot: a slot type
+  // the app does not know is a slot nothing can ever fill, and it would sit
+  // there looking like a normal requirement.
+  if (req.body?.party_template !== undefined) {
+    const tpl = req.body.party_template;
+    if (!Array.isArray(tpl) || tpl.length === 0) {
+      return res.status(400).json({ error: 'A party template is a list of parties.' });
+    }
+    for (const party of tpl) {
+      if (!Array.isArray(party?.slots) || party.slots.length === 0) {
+        return res.status(400).json({ error: 'Every party needs at least one slot.' });
+      }
+      const bad = party.slots.find((x) => !SLOT_NAMES.includes(x));
+      if (bad) return res.status(400).json({ error: `"${bad}" is not a slot type.` });
+    }
+    patch.party_template = tpl.map((p) => ({
+      name: String(p.name || 'Party').slice(0, 40),
+      slots: p.slots,
+    }));
+  }
+
+  // THE TEMPLATE AND THE NUMBERS MOVE TOGETHER, always.
+  //
+  // roster_size is generated from party_count * party_size + sub_count, and
+  // every role requirement is counted off the template. Changing one without
+  // the other leaves two descriptions of one thing that disagree — and only
+  // half of that is caught by a constraint, so party_size could be changed on
+  // its own and silently leave a 52-player roster beside a template describing
+  // 48 starters.
+  const nextCount = patch.party_count ?? t.party_count;
+  const nextSize = patch.party_size ?? t.party_size;
+  const base = patch.party_template ?? t.party_template;
+  if (!templateFits(base, nextCount, nextSize)) {
+    patch.party_template = resizeTemplate(base, nextCount, nextSize);
+  }
+
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nothing to change.' });
 
   const { data, error } = await supabase

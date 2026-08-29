@@ -7,6 +7,7 @@ import { Sigil } from './components/Brand';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Queue from './pages/Queue';
+import Setup from './pages/Setup';
 import Teams from './pages/Teams';
 import Board from './pages/Board';
 import Draft from './pages/Draft';
@@ -60,6 +61,7 @@ function Shell() {
           {captainOf && <NavLink to="/board" className={link}>Draft board</NavLink>}
           {user?.isOrganizer && <NavLink to="/queue" className={link}>Approval queue</NavLink>}
           {user?.isOrganizer && <NavLink to="/teams" className={link}>Teams</NavLink>}
+          {user?.isOrganizer && <NavLink to="/setup" className={link}>Setup</NavLink>}
         </div>
         <div className="md:mt-auto px-2 flex md:flex-col items-center md:items-start gap-2 text-xs text-ash">
           <span className="whitespace-nowrap">
@@ -148,6 +150,7 @@ export default function App() {
               <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />
               <Route path="/queue" element={<OrganizerOnly><Queue /></OrganizerOnly>} />
               <Route path="/teams" element={<OrganizerOnly><Teams /></OrganizerOnly>} />
+              <Route path="/setup" element={<OrganizerOnly><Setup /></OrganizerOnly>} />
               <Route path="*" element={<Navigate to="/signup" replace />} />
             </Route>
           </Routes>
