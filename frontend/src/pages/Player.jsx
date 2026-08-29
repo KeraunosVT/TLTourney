@@ -34,7 +34,7 @@ export default function Player() {
   if (error) return <div className="p-8 max-w-[700px]"><Note tone="bad">{error}</Note></div>;
 
   const { player, team, drafted, stats } = data;
-  const played = stats.matches > 0;
+  const played = stats.games > 0;
 
   return (
     <div className="px-6 py-7 max-w-[1200px] mx-auto">
@@ -76,12 +76,16 @@ export default function Player() {
       ) : (
         <>
           <div className="grid gap-3 mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
-            <Tile label="Matches" value={stats.matches} />
-            <Tile label="Kills" value={stats.kills} note={`${stats.avg_kills.toFixed(1)} / match`} />
+            <Tile
+              label="Games"
+              value={stats.games}
+              note={`across ${stats.matches} match${stats.matches === 1 ? '' : 'es'}`}
+            />
+            <Tile label="Kills" value={stats.kills} note={`${stats.avg_kills.toFixed(1)} / game`} />
             <Tile label="Assists" value={stats.assists} />
-            <Tile label="Damage" value={big(stats.damage_dealt)} note={`${big(stats.avg_damage)} / match`} />
-            <Tile label="Healing" value={big(stats.healing)} note={`${big(stats.avg_healing)} / match`} />
-            <Tile label="Damage taken" value={big(stats.damage_taken)} note={`${big(stats.avg_taken)} / match`} />
+            <Tile label="Damage" value={big(stats.damage_dealt)} note={`${big(stats.avg_damage)} / game`} />
+            <Tile label="Healing" value={big(stats.healing)} note={`${big(stats.avg_healing)} / game`} />
+            <Tile label="Damage taken" value={big(stats.damage_taken)} note={`${big(stats.avg_taken)} / game`} />
           </div>
 
           {stats.orphaned > 0 && (
@@ -97,12 +101,13 @@ export default function Player() {
           )}
 
           <div className="grid gap-4 lg:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)] items-start">
-            <Panel title="Matches" subtitle="Most recent first">
+            <Panel title="Games" subtitle="Most recent first">
               <div className="overflow-x-auto">
                 <table className="w-full text-[13px] border-collapse">
                   <thead>
                     <tr className="text-ash text-[10px] uppercase tracking-[0.1em] border-b border-line">
                       <th className="text-left px-3 py-2 font-semibold">Match</th>
+                      <th className="text-left px-3 py-2 font-semibold">Map</th>
                       <th className="text-left px-3 py-2 font-semibold">Class</th>
                       <th className="text-right px-3 py-2 font-semibold">#</th>
                       <th className="text-right px-3 py-2 font-semibold">K</th>
@@ -113,15 +118,17 @@ export default function Player() {
                   </thead>
                   <tbody>
                     {stats.history.map((h) => (
-                      <tr key={h.match_id} className="border-b border-line/40">
-                        <td className="px-3 py-1.5">
+                      <tr key={h.id} className="border-b border-line/40">
+                        <td className="px-3 py-1.5 whitespace-nowrap">
                           <Link
                             to={`/match/${encodeURIComponent(h.key)}`}
                             className="mono text-[12px] hover:text-crimsonbright underline underline-offset-2"
                           >
                             {h.key}
                           </Link>
+                          {h.game_number && <span className="text-[11px] text-ash ml-1.5">g{h.game_number}</span>}
                         </td>
+                        <td className="px-3 py-1.5 text-ash text-[12px] truncate">{h.map || '—'}</td>
                         <td className="px-3 py-1.5 text-ash text-[12px]">{h.class}</td>
                         <td className="px-3 py-1.5 text-right mono text-ash">{h.rank ?? '—'}</td>
                         <td className="px-3 py-1.5 text-right mono">{h.kills}</td>
@@ -144,7 +151,7 @@ export default function Player() {
                     <div className="w-[70px] h-1.5 rounded-full bg-panelup overflow-hidden">
                       <div
                         className="h-full bg-crimson rounded-full"
-                        style={{ width: `${(c.count / stats.matches) * 100}%` }}
+                        style={{ width: `${(c.count / stats.games) * 100}%` }}
                       />
                     </div>
                   </div>

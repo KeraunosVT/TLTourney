@@ -37,10 +37,14 @@ const { MAPS, available } = require('../shared/maps.cjs');
 // A 50v50 scoreboard is paginated — a dozen rows on screen at a time — so a
 // full board is ten or so screenshots, and people overlap them so nothing falls
 // between two shots. Batch upload is the normal case here, not a convenience.
-const MAX_FILES = 20;
+// Capped with the PEAK in mind, not the typical case. multer buffers every
+// file in memory before the handler runs, so the limit that matters is files x
+// fileSize — 20 x 12MB was 240MB of headroom this app does not have on a small
+// host. A scoreboard screenshot is well under a megabyte.
+const MAX_FILES = 12;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 12 * 1024 * 1024, files: MAX_FILES },
+  limits: { fileSize: 6 * 1024 * 1024, files: MAX_FILES },
 });
 
 // Gemini calls run a few at a time rather than all at once. Ten concurrent
@@ -138,7 +142,7 @@ router.get('/leaderboard', async (req, res) => {
 
   const [{ data: rows, error }, { data: signups }, { data: teams }] = await Promise.all([
     supabase.from('player_match_stats')
-      .select('signup_id, team_id, player_name, weapon_1, weapon_2, kills, assists, damage_dealt, damage_taken, healing')
+      .select('signup_id, match_id, team_id, player_name, weapon_1, weapon_2, kills, assists, damage_dealt, damage_taken, healing')
       .eq('tournament_id', t.id).not('signup_id', 'is', null),
     supabase.from('player_signups').select('id, player_name, role').eq('tournament_id', t.id),
     supabase.from('teams').select('id, name, tag').eq('tournament_id', t.id),
@@ -186,7 +190,7 @@ router.get('/player/:signupId', async (req, res) => {
   if (!player) return res.status(404).json({ error: 'No such player in this tournament.' });
 
   const { data: rows, error } = await supabase.from('player_match_stats')
-    .select(`${STAT_COLS}, match:matches (id, key, bracket, round, idx, scheduled_at, winner_team_id)`)
+    .select(`${STAT_COLS}, match:matches (id, key, bracket, round, idx, scheduled_at, winner_team_id), game:match_games (game_number, map)`)
     .eq('tournament_id', t.id).eq('signup_id', player.id);
   if (error) {
     console.error('player profile read failed:', error.message);

@@ -104,12 +104,12 @@ export default function Leaderboard() {
                   <th className="text-left px-3 py-2 font-semibold">Player</th>
                   <th className="text-left px-3 py-2 font-semibold">Team</th>
                   <th className="text-left px-3 py-2 font-semibold">Class</th>
-                  <th className="text-right px-3 py-2 font-semibold">M</th>
+                  <th className="text-right px-3 py-2 font-semibold" title="games played">G</th>
                   <th className="text-right px-3 py-2 font-semibold">K</th>
                   <th className="text-right px-3 py-2 font-semibold">A</th>
                   <th className="text-right px-3 py-2 font-semibold">Damage</th>
                   <th className="text-right px-3 py-2 font-semibold">Healing</th>
-                  <th className="text-right px-3 py-2 font-semibold">Dmg / match</th>
+                  <th className="text-right px-3 py-2 font-semibold">Dmg / game</th>
                 </tr>
               </thead>
               <tbody>
@@ -130,7 +130,12 @@ export default function Leaderboard() {
                       {teams.get(e.team_id)?.tag || teams.get(e.team_id)?.name || '—'}
                     </td>
                     <td className="px-3 py-1.5 text-ash text-[12px]">{e.main_class || '—'}</td>
-                    <td className="px-3 py-1.5 text-right mono text-ash">{e.matches}</td>
+                    <td
+                      className="px-3 py-1.5 text-right mono text-ash"
+                      title={`${e.games} games across ${e.matches} match${e.matches === 1 ? '' : 'es'}`}
+                    >
+                      {e.games}
+                    </td>
                     <td className="px-3 py-1.5 text-right mono">{e.kills}</td>
                     <td className="px-3 py-1.5 text-right mono">{e.assists}</td>
                     <td className="px-3 py-1.5 text-right mono">{big(e.damage_dealt)}</td>

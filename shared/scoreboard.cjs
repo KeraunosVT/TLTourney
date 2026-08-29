@@ -299,7 +299,13 @@ function playerProfile(rows) {
     classCount[cls] = (classCount[cls] || 0) + 1;
 
     history.push({
+      id: r.id || `${m.id}-${r.game?.game_number ?? 0}`,
       match_id: m.id,
+      // A best-of-three puts three rows on one match, so the match id alone no
+      // longer identifies a row — it was being used as a React key, which
+      // silently collapsed three games into one rendered row.
+      game_number: r.game?.game_number ?? null,
+      map: r.game?.map ?? null,
       key: m.key,
       label: m.label || null,
       bracket: m.bracket,
@@ -327,18 +333,28 @@ function playerProfile(rows) {
     return new Date(b.played_at) - new Date(a.played_at);
   });
 
-  const played = history.length;
+  // GAMES and MATCHES are different numbers now, and conflating them was a real
+  // bug: a scoreboard row is one GAME, and a best-of-three match produces up to
+  // three of them. Counting rows and calling it matches told somebody who
+  // played one series that they had played three, and divided their damage by
+  // three to get a "per match" average that was per game.
+  //
+  // Averages are per GAME, because that is the unit a scoreboard measures.
+  const games = history.length;
+  const matches = new Set(history.map((h) => h.match_id)).size;
+
   return {
     ...totals,
-    matches: played,
+    games,
+    matches,
     history,
     // Guarded, not because a crash would be bad but because 0/0 is NaN, and NaN
     // renders as "NaN" on a leaderboard and sorts unpredictably against numbers.
-    avg_kills: played ? totals.kills / played : 0,
-    avg_assists: played ? totals.assists / played : 0,
-    avg_damage: played ? totals.damage_dealt / played : 0,
-    avg_taken: played ? totals.damage_taken / played : 0,
-    avg_healing: played ? totals.healing / played : 0,
+    avg_kills: games ? totals.kills / games : 0,
+    avg_assists: games ? totals.assists / games : 0,
+    avg_damage: games ? totals.damage_dealt / games : 0,
+    avg_taken: games ? totals.damage_taken / games : 0,
+    avg_healing: games ? totals.healing / games : 0,
     classes: Object.entries(classCount)
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
@@ -369,13 +385,16 @@ function leaderboard(rows, people) {
         player_name: who.player_name || r.player_name,
         team_id: who.team_id ?? r.team_id ?? null,
         role: who.role || null,
-        matches: 0,
+        games: 0,
+        // A Set, because a best-of-three contributes three rows and one match.
+        matchIds: new Set(),
         classes: {},
         ...EMPTY_TOTALS,
       });
     }
     const e = by.get(r.signup_id);
-    e.matches += 1;
+    e.games += 1;
+    if (r.match_id) e.matchIds.add(r.match_id);
     e.kills += num(r.kills);
     e.assists += num(r.assists);
     e.damage_dealt += num(r.damage_dealt);
@@ -385,16 +404,21 @@ function leaderboard(rows, people) {
     e.classes[cls] = (e.classes[cls] || 0) + 1;
   });
 
-  return [...by.values()].map((e) => ({
+  return [...by.values()].map(({ matchIds, ...e }) => ({
     ...e,
-    // The class they played MOST, not the one from their latest match — a
+    // Falls back to the game count when no match ids came through, so a caller
+    // that forgot to select match_id under-reports rather than showing zero.
+    matches: matchIds.size || e.games,
+    // The class they played MOST, not the one from their latest game — a
     // healer who flexed to DPS once is still a healer.
     main_class: Object.entries(e.classes).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] || null,
     classes: Object.entries(e.classes).map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count),
-    avg_kills: e.matches ? e.kills / e.matches : 0,
-    avg_damage: e.matches ? e.damage_dealt / e.matches : 0,
-    avg_healing: e.matches ? e.healing / e.matches : 0,
+    // Per GAME. A scoreboard measures a game, and a "per match" figure that
+    // silently divided by games would flatter a three-game series.
+    avg_kills: e.games ? e.kills / e.games : 0,
+    avg_damage: e.games ? e.damage_dealt / e.games : 0,
+    avg_healing: e.games ? e.healing / e.games : 0,
   }));
 }
 
@@ -406,10 +430,10 @@ const SORTS = {
   kills: { label: 'Kills', total: true },
   assists: { label: 'Assists', total: true },
   damage_taken: { label: 'Damage taken', total: true },
-  avg_damage: { label: 'Damage / match', total: false },
-  avg_healing: { label: 'Healing / match', total: false },
-  avg_kills: { label: 'Kills / match', total: false },
-  matches: { label: 'Matches', total: true },
+  avg_damage: { label: 'Damage / game', total: false },
+  avg_healing: { label: 'Healing / game', total: false },
+  avg_kills: { label: 'Kills / game', total: false },
+  games: { label: 'Games played', total: true },
 };
 
 const isSort = (key) => Object.prototype.hasOwnProperty.call(SORTS, key);

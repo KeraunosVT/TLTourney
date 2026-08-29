@@ -513,3 +513,64 @@ test('the order the two icons were read in does not change the class', () => {
     assert.strictEqual(classify(w2, w1), c, `${c} reversed`);
   });
 });
+
+// ── Games are not matches ───────────────────────────────────────────────────
+// Best of three broke what a "match" counts. A scoreboard row is one GAME, and
+// counting rows and calling them matches told somebody who played one series
+// that they had played three — then divided their damage by three to produce a
+// "per match" average that was per game. Both numbers looked entirely normal.
+test('ONE BEST-OF-THREE IS THREE GAMES AND ONE MATCH', () => {
+  const p = playerProfile([
+    stat({ match: match('m1'), kills: 3, damage_dealt: 300 }),
+    stat({ match: match('m1'), kills: 4, damage_dealt: 400 }),
+    stat({ match: match('m1'), kills: 5, damage_dealt: 500 }),
+  ]);
+  assert.strictEqual(p.games, 3);
+  assert.strictEqual(p.matches, 1);
+  assert.strictEqual(p.kills, 12);
+  assert.strictEqual(p.avg_damage, 400, 'averages are per GAME, the unit a scoreboard measures');
+});
+
+test('games across several matches count both ways', () => {
+  const p = playerProfile([
+    stat({ match: match('m1') }), stat({ match: match('m1') }),
+    stat({ match: match('m2') }),
+  ]);
+  assert.strictEqual(p.games, 3);
+  assert.strictEqual(p.matches, 2);
+});
+
+test('every history row is distinguishable, so three games do not render as one', () => {
+  // The page keyed these on match_id, which is now shared by every game of a
+  // series — React collapsed three rows into one and nothing looked wrong.
+  const rows = [
+    stat({ match: match('m1'), id: 'r1', game: { game_number: 1, map: 'Talus' } }),
+    stat({ match: match('m1'), id: 'r2', game: { game_number: 2, map: 'Daigon' } }),
+    stat({ match: match('m1'), id: 'r3', game: { game_number: 3, map: 'Morokai' } }),
+  ];
+  const p = playerProfile(rows);
+  assert.strictEqual(new Set(p.history.map((h) => h.id)).size, 3);
+  assert.deepStrictEqual(p.history.map((h) => h.map).sort(), ['Daigon', 'Morokai', 'Talus']);
+});
+
+test('the leaderboard separates games from matches too', () => {
+  const board = leaderboard([
+    { signup_id: 'p1', match_id: 'm1', weapon_1: 'Staff', weapon_2: 'Wand', kills: 1, damage_dealt: 100 },
+    { signup_id: 'p1', match_id: 'm1', weapon_1: 'Staff', weapon_2: 'Wand', kills: 1, damage_dealt: 300 },
+    { signup_id: 'p1', match_id: 'm2', weapon_1: 'Staff', weapon_2: 'Wand', kills: 1, damage_dealt: 200 },
+  ], people);
+  assert.strictEqual(board[0].games, 3);
+  assert.strictEqual(board[0].matches, 2);
+  assert.strictEqual(board[0].avg_damage, 200);
+});
+
+test('rows with no match id still report a sane match count', () => {
+  // A caller that forgets to select match_id should under-report, not show zero
+  // matches beside three games.
+  const board = leaderboard([
+    { signup_id: 'p1', weapon_1: 'Staff', weapon_2: 'Wand', damage_dealt: 100 },
+    { signup_id: 'p1', weapon_1: 'Staff', weapon_2: 'Wand', damage_dealt: 100 },
+  ], people);
+  assert.strictEqual(board[0].games, 2);
+  assert.strictEqual(board[0].matches, 2);
+});
