@@ -322,9 +322,24 @@ union all
 -- THE one that protects every number in the tournament. Without it, uploading
 -- the same scoreboard twice doubles everybody's totals — and the totals stay
 -- entirely plausible while being exactly wrong.
-select '012 · one row per player per match',
-       exists (select 1 from pg_indexes
-               where schemaname = 'public' and indexname = 'pms_one_row_per_player_per_match')
+--
+-- SUPERSEDED BY 013, which is why this line does not simply check that 012's
+-- index is there. A match became a series of GAMES, so the rule moved one level
+-- down — pms_one_row_per_player_per_game — and 013 dropped this one, because
+-- refusing a second scoreboard per match is exactly wrong for a best of three.
+--
+-- This line used to assert the old index still existed, and 013's line below
+-- asserts it is gone. The two contradicted each other, so the sheet reported a
+-- failure on every correctly migrated database from 013 onward. It now checks
+-- what actually has to be true: the old rule is gone AND the rule that replaced
+-- it is in place. Written as one line rather than deleted, the way 004's
+-- captain index is, so that reading the sheet in order does not leave anybody
+-- thinking the protection was quietly abandoned.
+select '012 · the per-match scoreboard rule was replaced by 013''s per-game one',
+       not exists (select 1 from pg_indexes
+                   where schemaname = 'public' and indexname = 'pms_one_row_per_player_per_match')
+       and exists (select 1 from pg_indexes
+                   where schemaname = 'public' and indexname = 'pms_one_row_per_player_per_game')
 union all
 select '012 · stats cannot be negative',
        exists (select 1 from pg_constraint where conname = 'pms_stats_not_negative')
@@ -464,4 +479,41 @@ union all
 select '016 · no pick was saved after kickoff',
        not exists (select 1 from predictions p
                    join matches m on m.id = p.match_id
-                   where m.scheduled_at is not null and p.updated_at > m.scheduled_at);
+                   where m.scheduled_at is not null and p.updated_at > m.scheduled_at)
+union all
+-- ── 017 ────────────────────────────────────────────────────────────────────
+select '017 · prediction_questions and question_answers exist',
+       (select count(*) = 2 from information_schema.tables
+         where table_schema = 'public'
+           and table_name in ('prediction_questions', 'question_answers'))
+union all
+select '017 · one answer per person per question',
+       exists (select 1 from pg_constraint where conname = 'question_answers_one_per_person')
+union all
+select '017 · every question has 2 to 8 options',
+       exists (select 1 from pg_constraint where conname = 'prediction_questions_option_count')
+union all
+-- An answer pointing at an option the question no longer lists. It would score
+-- nobody and vanish from the split, which is indistinguishable from never
+-- having answered — the API refuses to remove a chosen option, and this is how
+-- you find any that slipped past it.
+select '017 · every answer points at an option that still exists',
+       not exists (
+         select 1 from question_answers a
+           join prediction_questions q on q.id = a.question_id
+          where not exists (select 1 from jsonb_array_elements(q.options) o
+                             where o->>'id' = a.option_id))
+union all
+-- A settled question whose correct answer is not one of its own options pays
+-- nobody and looks settled.
+select '017 · a settled question names one of its own options',
+       not exists (
+         select 1 from prediction_questions q
+          where q.correct_option_id is not null
+            and not exists (select 1 from jsonb_array_elements(q.options) o
+                             where o->>'id' = q.correct_option_id))
+union all
+select '017 · no answer was saved after its question closed',
+       not exists (select 1 from question_answers a
+                   join prediction_questions q on q.id = a.question_id
+                   where q.closes_at is not null and a.updated_at > q.closes_at);

@@ -14,9 +14,11 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  WINNER_POINTS, SCORELINE_BONUS, CHAMPION_POINTS,
+  WINNER_POINTS, SCORELINE_BONUS, CHAMPION_POINTS, QUESTION_POINTS, MAX_OPTIONS,
   loserGameOptions, scorelineLabel, pickProblem,
-  pickWindow, championWindow, scorePick, standings, crowdSplit,
+  pickWindow, championWindow, questionWindow, answersVisible,
+  scorePick, scoreAnswer, questionProblem, answerSplit,
+  standings, crowdSplit,
 } = require('../../shared/predictions.cjs');
 
 const A = 'team-a';
@@ -301,6 +303,141 @@ test('the newest display name wins', () => {
     ],
   });
   assert.strictEqual(rows[0].name, 'NewName');
+});
+
+// ── Organizer-written questions ─────────────────────────────────────────────
+const question = (over = {}) => ({
+  id: 'q1',
+  prompt: 'Does the grand final go to a reset?',
+  options: [{ id: 'o1', label: 'Yes' }, { id: 'o2', label: 'No' }],
+  points: 10,
+  closes_at: null,
+  correct_option_id: null,
+  void: false,
+  ...over,
+});
+
+test('a question with no closing time stays open until it is settled', () => {
+  assert.strictEqual(questionWindow(question()).open, true);
+  assert.strictEqual(questionWindow(question()).closesAt, null);
+
+  const settled = question({ correct_option_id: 'o1' });
+  assert.strictEqual(questionWindow(settled).open, false);
+  assert.strictEqual(questionWindow(settled).done, true);
+});
+
+test('a closing time closes it, on the second', () => {
+  const at = new Date('2026-09-12T19:00:00Z').toISOString();
+  const q = question({ closes_at: at });
+  assert.strictEqual(questionWindow(q, Date.parse(at) - 1).open, true);
+  assert.strictEqual(questionWindow(q, Date.parse(at)).open, false);
+  assert.match(questionWindow(q, Date.parse(at)).reason, /waiting on the answer/i);
+});
+
+test('NAMES ARE HIDDEN WHILE IT IS OPEN, shown once it is not', () => {
+  // Otherwise the question is a poll people copy, and what each person actually
+  // thought — the only thing being measured — is unrecoverable.
+  assert.strictEqual(answersVisible(question()), false);
+  assert.strictEqual(answersVisible(question({ correct_option_id: 'o2' })), true);
+
+  const at = new Date('2026-09-12T19:00:00Z').toISOString();
+  assert.strictEqual(answersVisible(question({ closes_at: at }), Date.parse(at) - 1), false);
+  assert.strictEqual(answersVisible(question({ closes_at: at }), Date.parse(at) + 1), true);
+});
+
+test('an unsettled question scores nothing; a settled one pays its own points', () => {
+  const answer = { question_id: 'q1', option_id: 'o1' };
+
+  const pending = scoreAnswer(answer, question());
+  assert.strictEqual(pending.settled, false);
+  assert.strictEqual(pending.points, 0);
+
+  const hit = scoreAnswer(answer, question({ correct_option_id: 'o1', points: 25 }));
+  assert.strictEqual(hit.points, 25, 'the question carries its own value');
+  assert.ok(hit.correct && hit.settled);
+
+  const miss = scoreAnswer(answer, question({ correct_option_id: 'o2' }));
+  assert.strictEqual(miss.points, 0);
+  assert.strictEqual(miss.correct, false);
+  assert.strictEqual(miss.settled, true, 'wrong is settled, not pending');
+});
+
+test('A VOIDED QUESTION PAYS NOBODY, even the option marked correct', () => {
+  // The situation never arose, so there is no right answer. Voiding has to beat
+  // a correct_option_id left over from before somebody changed their mind.
+  const voided = question({ correct_option_id: 'o1', void: true });
+  const scored = scoreAnswer({ question_id: 'q1', option_id: 'o1' }, voided);
+  assert.strictEqual(scored.points, 0);
+  assert.strictEqual(scored.settled, false);
+});
+
+test('question points default sensibly when none was stored', () => {
+  const scored = scoreAnswer({ question_id: 'q1', option_id: 'o1' },
+    question({ correct_option_id: 'o1', points: null }));
+  assert.strictEqual(scored.points, QUESTION_POINTS);
+});
+
+test('what a question may not be', () => {
+  const ok = { prompt: 'Who tops damage?', options: [{ label: 'A' }, { label: 'B' }], points: 10 };
+  assert.strictEqual(questionProblem(ok), null);
+
+  assert.match(questionProblem({ ...ok, prompt: '  ' }), /needs a prompt/);
+  assert.match(questionProblem({ ...ok, options: [{ label: 'A' }] }), /at least 2/);
+  assert.match(questionProblem({ ...ok, options: [{ label: 'A' }, { label: 'a' }] }), /same thing/);
+  assert.match(questionProblem({ ...ok, points: 0 }), /between 1 and 100/);
+  assert.match(questionProblem({ ...ok, points: 2.5 }), /whole number/);
+
+  const tooMany = Array.from({ length: MAX_OPTIONS + 1 }, (_, i) => ({ label: `opt ${i}` }));
+  assert.match(questionProblem({ ...ok, options: tooMany }), /is the most/);
+
+  // Blank options are dropped, not counted — an empty row in the form is
+  // somebody who stopped typing, not a third choice.
+  assert.strictEqual(questionProblem({ ...ok, options: [{ label: 'A' }, { label: 'B' }, { label: '  ' }] }), null);
+});
+
+test('the answer split covers every option, including the ones nobody chose', () => {
+  const q = question({ options: [{ id: 'o1', label: 'Yes' }, { id: 'o2', label: 'No' }] });
+  const split = answerSplit([
+    { question_id: 'q1', option_id: 'o1' },
+    { question_id: 'q1', option_id: 'o1' },
+    { question_id: 'q1', option_id: 'o1' },
+    { question_id: 'q1', option_id: 'gone' },   // an option since removed
+    { question_id: 'other', option_id: 'o2' },
+  ], q);
+
+  assert.deepStrictEqual(split.map((s) => [s.label, s.count, s.pct]), [
+    ['Yes', 3, 100],
+    ['No', 0, 0],
+  ]);
+});
+
+test('question points land in the standings beside the match points', () => {
+  const rows = standings({
+    matches: twoMatches,
+    picks: [{ discord_id: '1', display_name: 'Ana', match_id: 'm1', team_id: A, loser_games: 0 }],
+    questions: [
+      question({ id: 'q1', correct_option_id: 'o1', points: 20 }),
+      question({ id: 'q2', correct_option_id: 'o2', points: 10 }),
+      question({ id: 'q3' }),                              // unsettled
+    ],
+    answers: [
+      { discord_id: '1', display_name: 'Ana', question_id: 'q1', option_id: 'o1' },  // +20
+      { discord_id: '1', display_name: 'Ana', question_id: 'q2', option_id: 'o1' },  // miss
+      { discord_id: '1', display_name: 'Ana', question_id: 'q3', option_id: 'o1' },  // pending
+      { discord_id: '2', display_name: 'Bo', question_id: 'q2', option_id: 'o2' },   // +10
+    ],
+  });
+
+  const ana = rows.find((r) => r.name === 'Ana');
+  assert.strictEqual(ana.points, WINNER_POINTS + SCORELINE_BONUS + 20);
+  assert.strictEqual(ana.question_points, 20);
+  assert.strictEqual(ana.questions_correct, 1);
+  assert.strictEqual(ana.answers, 3, 'three answered');
+
+  // Somebody who only answered a question still appears, and is ranked on it.
+  const bo = rows.find((r) => r.name === 'Bo');
+  assert.strictEqual(bo.points, 10);
+  assert.strictEqual(bo.picks, 0);
 });
 
 // ── The crowd bar ───────────────────────────────────────────────────────────

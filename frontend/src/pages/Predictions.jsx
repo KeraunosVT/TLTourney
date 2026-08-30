@@ -15,11 +15,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api, { errorMessage } from '../api';
-import { Panel, Pill, Empty, Note } from '../components/ui';
-import { whenShort } from '../lib/clock';
-import { scorelineLabel } from '@shared/predictions.cjs';
+import { Panel, Pill, Button, Empty, Note } from '../components/ui';
+import { useAuth } from '../auth';
+import { whenShort, toLocalInput, fromLocalInput } from '../lib/clock';
+import { scorelineLabel, MAX_OPTIONS } from '@shared/predictions.cjs';
 
 export default function Predictions() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [table, setTable] = useState(null);
   const [tab, setTab] = useState('picks');
@@ -85,6 +87,59 @@ export default function Predictions() {
     }
   }
 
+  async function answer(questionId, optionId) {
+    setBusy(questionId);
+    setBanner(null);
+    try {
+      const { data: d } = await api.put('/api/predictions/answer', {
+        question_id: questionId, option_id: optionId,
+      });
+      setData(d);
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+      load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // ── Organizer ─────────────────────────────────────────────────────────────
+  // All three take the same shape: send it, take the whole overview back, and
+  // let the page redraw from one snapshot rather than patching a row in place.
+  async function organizerCall(fn, label) {
+    setBanner(null);
+    try {
+      const { data: d } = await fn();
+      setData(d.ok ? d : d);
+      if (label) setBanner({ tone: 'good', text: label(d) });
+      return true;
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+      return false;
+    }
+  }
+
+  const createQuestion = (body) => organizerCall(
+    () => api.post('/api/organizer/predictions/question', body),
+    () => 'Question posted.',
+  );
+
+  const editQuestion = (body) => organizerCall(
+    () => api.put('/api/organizer/predictions/question', body),
+  );
+
+  const settleQuestion = (body) => organizerCall(
+    () => api.post('/api/organizer/predictions/question/settle', body),
+    (d) => (d.paid === null || d.paid === undefined
+      ? 'Question updated.'
+      : `Settled — ${d.paid} ${d.paid === 1 ? 'person' : 'people'} called it.`),
+  );
+
+  const removeQuestion = (id, force) => organizerCall(
+    () => api.delete('/api/organizer/predictions/question', { data: { id, force } }),
+    () => 'Question removed.',
+  );
+
   async function pickChampion(teamId) {
     setBusy('champion');
     setBanner(null);
@@ -121,7 +176,8 @@ export default function Predictions() {
           <h1 className="font-display text-[27px]">Predictions</h1>
           <p className="text-ash text-sm mt-1.5 max-w-[70ch]">
             {scoring.winner} points for calling the winner, {scoring.scoreline} more for the exact
-            scoreline, {scoring.champion} for the champion. Picks lock when the match starts.
+            scoreline, {scoring.champion} for the champion. Questions are worth whatever they say.
+            Picks lock when the match starts.
           </p>
         </div>
         {me && (
@@ -157,6 +213,22 @@ export default function Predictions() {
             teams={data?.teams || []}
             busy={busy === 'champion'}
             onPick={pickChampion}
+          />
+
+          {/* Questions come before the matches. They are the ones somebody sat
+              down and wrote, they are usually the ones with a deadline, and a
+              new one appearing at the bottom of a long list of fixtures is a
+              new one nobody answers. */}
+          <Questions
+            questions={data?.questions || []}
+            canEdit={!!user?.isOrganizer}
+            defaultPoints={scoring.question}
+            busy={busy}
+            onAnswer={answer}
+            onCreate={createQuestion}
+            onEdit={editQuestion}
+            onSettle={settleQuestion}
+            onRemove={removeQuestion}
           />
 
           {matches.length === 0 && (
@@ -209,8 +281,358 @@ const Group = ({ title, subtitle, children }) => (
   </Panel>
 );
 
+// ── Questions somebody wrote ────────────────────────────────────────────────
+function Questions({ questions, canEdit, defaultPoints, busy, onAnswer, onCreate, onEdit, onSettle, onRemove }) {
+  const [asking, setAsking] = useState(false);
+
+  if (!questions.length && !canEdit) return null;
+
+  return (
+    <Panel
+      title="Questions"
+      subtitle={questions.length ? undefined : 'Nothing asked yet'}
+      className="mb-4"
+      right={canEdit && (
+        <button
+          onClick={() => setAsking((x) => !x)}
+          className="text-[12px] text-crimsonbright hover:text-bone underline underline-offset-2"
+        >
+          {asking ? 'cancel' : 'ask a question'}
+        </button>
+      )}
+    >
+      {asking && (
+        <Ask
+          defaultPoints={defaultPoints}
+          onCancel={() => setAsking(false)}
+          onCreate={async (body) => { if (await onCreate(body)) setAsking(false); }}
+        />
+      )}
+
+      <div className="flex flex-col">
+        {questions.map((q) => (
+          <QuestionCard
+            key={q.id}
+            q={q}
+            canEdit={canEdit}
+            busy={busy === q.id}
+            onAnswer={onAnswer}
+            onEdit={onEdit}
+            onSettle={onSettle}
+            onRemove={onRemove}
+          />
+        ))}
+      </div>
+
+      {!questions.length && !asking && canEdit && (
+        <p className="px-4 py-3 text-[13px] text-ash">
+          Anything worth arguing about: does the grand final go to a reset, which team tops the
+          damage chart, how many games the final runs.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
+function QuestionCard({ q, canEdit, busy, onAnswer, onEdit, onSettle, onRemove }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState(null);
+  const [tools, setTools] = useState(false);
+
+  // Fetched on demand rather than with the page: the breakdown is names, it is
+  // only legible one question at a time, and most questions are never expanded.
+  async function reveal() {
+    setOpen((x) => !x);
+    if (rows || open) return;
+    try {
+      const { data: d } = await api.get(`/api/predictions/question/${q.id}/answers`);
+      setRows(d.rows || []);
+    } catch (err) {
+      setRows([]);
+    }
+  }
+
+  const settled = !!q.correct_option_id && !q.void;
+  const label = (id) => (q.options.find((o) => o.id === id)?.label ?? '—');
+
+  return (
+    <div className={`px-4 py-3 border-b border-line/50 last:border-b-0 ${busy ? 'opacity-60' : ''}`}>
+      <div className="flex items-start gap-3 flex-wrap mb-2">
+        <span className="text-[14px] flex-1 min-w-[200px]">{q.prompt}</span>
+
+        <span className="text-[11.5px] text-ash whitespace-nowrap">{q.points} pts</span>
+
+        {q.window?.open && q.closes_at && (
+          <span className="text-[11.5px] text-ash whitespace-nowrap">closes {whenShort(q.closes_at)}</span>
+        )}
+
+        {q.void && <Pill tone="quiet">void</Pill>}
+
+        {/* What it turned out to be worth. A miss says so — silence would read
+            as "not scored yet". */}
+        {q.mine?.settled && (
+          <span className={`text-[11.5px] uppercase tracking-[0.1em] whitespace-nowrap ${
+            q.mine.correct ? 'text-verdigris' : 'text-ash/60'
+          }`}>
+            {q.mine.correct ? `+${q.mine.points}` : 'missed'}
+          </span>
+        )}
+      </div>
+
+      <div className="flex gap-1.5 flex-wrap">
+        {q.options.map((o) => {
+          const mine = q.mine?.option_id === o.id;
+          const right = settled && q.correct_option_id === o.id;
+          const share = q.split?.find((s) => s.option_id === o.id);
+
+          return (
+            <button
+              key={o.id}
+              disabled={!q.window?.open || busy}
+              onClick={() => onAnswer(q.id, o.id)}
+              className={`px-3 py-1.5 rounded border text-[13px] transition-colors ${
+                right
+                  ? 'border-verdigris/70 bg-verdigris/10 text-bone'
+                  : mine
+                    ? 'border-crimson bg-crimson/[0.12] text-bone'
+                    : 'border-line text-ash'
+              } ${q.window?.open && !busy ? 'hover:text-bone hover:border-ash/50' : 'cursor-default'}`}
+            >
+              {o.label}
+              {share?.count > 0 && (
+                <span className="text-[11px] text-ash ml-2">{share.pct}%</span>
+              )}
+              {right && <span className="text-[11px] text-verdigris ml-2">correct</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap mt-2">
+        <span className="text-[11.5px] text-ash">
+          {q.answered} answer{q.answered === 1 ? '' : 's'}
+          {q.right !== null && q.right !== undefined && (
+            <span className="text-verdigris"> · {q.right} got it right</span>
+          )}
+        </span>
+
+        {!q.window?.open && (
+          <button
+            onClick={reveal}
+            className="text-[11.5px] text-ash hover:text-bone underline underline-offset-2"
+          >
+            {open ? 'hide who' : 'who called it'}
+          </button>
+        )}
+
+        {q.window?.open && !q.closes_at && (
+          <span className="text-[11.5px] text-ash/60">open until it is settled</span>
+        )}
+
+        {canEdit && (
+          <button
+            onClick={() => setTools((x) => !x)}
+            className="ml-auto text-[11.5px] text-crimsonbright hover:text-bone underline underline-offset-2"
+          >
+            {tools ? 'done' : 'settle'}
+          </button>
+        )}
+      </div>
+
+      {open && <Who rows={rows} />}
+
+      {tools && canEdit && (
+        <Settle q={q} label={label} onEdit={onEdit} onSettle={onSettle} onRemove={onRemove} />
+      )}
+    </div>
+  );
+}
+
+/** Who answered what, right answers first. */
+function Who({ rows }) {
+  if (!rows) return <div className="mt-2 text-[12px] text-ash">Loading…</div>;
+  if (!rows.length) return <div className="mt-2 text-[12px] text-ash">Nobody answered this one.</div>;
+
+  return (
+    <div className="mt-2 border-t border-line/60 pt-2 flex flex-wrap gap-x-4 gap-y-1">
+      {rows.map((r, i) => (
+        <span key={`${r.name}-${i}`} className="text-[12px]">
+          <span className={r.correct ? 'text-verdigris' : 'text-ash'}>{r.name}</span>
+          {r.is_me && <span className="text-crimsonbright text-[10px] ml-1">you</span>}
+          <span className="text-ash/60 text-[11px] ml-1.5">{r.option}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** The organizer's controls for one question. */
+function Settle({ q, label, onEdit, onSettle, onRemove }) {
+  const [closesAt, setClosesAt] = useState(toLocalInput(q.closes_at));
+
+  return (
+    <div className="mt-3 border-t border-line pt-3 flex flex-col gap-2.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[12px] text-ash w-[110px]">Correct answer</span>
+        <select
+          className="bg-panelup border border-line rounded px-2 py-1 text-[12.5px] w-[220px]
+                     outline-none focus:border-crimson"
+          value={q.correct_option_id || ''}
+          onChange={(e) => onSettle({ id: q.id, correct_option_id: e.target.value || null })}
+        >
+          <option value="">— not settled —</option>
+          {q.options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+        </select>
+
+        {/* Voiding beats deleting, and says so. A voided question keeps
+            everybody's answer on record and scores nobody. */}
+        <button
+          onClick={() => onSettle({ id: q.id, void: !q.void })}
+          className="text-[11.5px] text-ash hover:text-bone underline underline-offset-2"
+        >
+          {q.void ? 'un-void' : 'void it'}
+        </button>
+
+        <button
+          onClick={() => {
+            const force = q.answered > 0
+              && window.confirm(`${q.answered} answered this. Deleting removes their answers — void it instead?\n\nOK deletes it anyway.`);
+            onRemove(q.id, q.answered > 0 ? force : false);
+          }}
+          className="text-[11.5px] text-crimsonbright hover:text-bone underline underline-offset-2"
+        >
+          delete
+        </button>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[12px] text-ash w-[110px]">Closes</span>
+        <input
+          type="datetime-local"
+          className="field-input py-1 text-[12.5px] w-auto"
+          value={closesAt}
+          onChange={(e) => setClosesAt(e.target.value)}
+        />
+        <Button
+          variant="ghost"
+          className="text-[12px] py-1"
+          onClick={() => onEdit({ id: q.id, closes_at: fromLocalInput(closesAt) || '' })}
+        >
+          Save
+        </Button>
+        {q.closes_at && (
+          <span className="text-[11.5px] text-ash">now {whenShort(q.closes_at)}</span>
+        )}
+      </div>
+
+      {q.correct_option_id && !q.void && (
+        <p className="text-[11.5px] text-verdigris">
+          Settled on “{label(q.correct_option_id)}”. Changing it moves the points.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Writing a new one. */
+function Ask({ defaultPoints, onCreate, onCancel }) {
+  const [prompt, setPrompt] = useState('');
+  const [options, setOptions] = useState(['', '']);
+  const [points, setPoints] = useState(defaultPoints || 10);
+  const [closesAt, setClosesAt] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const setOption = (i, v) => setOptions((prev) => prev.map((x, n) => (n === i ? v : x)));
+
+  async function submit(e) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await onCreate({
+        prompt,
+        options: options.map((label) => ({ label })),
+        points: Number(points),
+        closes_at: fromLocalInput(closesAt) || null,
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="px-4 py-3 border-b border-line bg-panelup/40 flex flex-col gap-2.5">
+      <input
+        className="field-input py-1.5 text-[13.5px]"
+        placeholder="Does the grand final go to a reset?"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        maxLength={200}
+        autoFocus
+      />
+
+      <div className="flex flex-wrap gap-2">
+        {options.map((o, i) => (
+          <input
+            key={i}
+            className="field-input py-1 text-[12.5px] w-[180px]"
+            placeholder={`Option ${i + 1}`}
+            value={o}
+            onChange={(e) => setOption(i, e.target.value)}
+            maxLength={60}
+          />
+        ))}
+        {options.length < MAX_OPTIONS && (
+          <button
+            type="button"
+            onClick={() => setOptions((prev) => [...prev, ''])}
+            className="text-[12px] text-ash hover:text-bone underline underline-offset-2"
+          >
+            add an option
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <label className="flex items-center gap-2">
+          <span className="text-[12px] text-ash">Worth</span>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            className="field-input py-1 text-[12.5px] w-[70px]"
+            value={points}
+            onChange={(e) => setPoints(e.target.value)}
+          />
+          <span className="text-[12px] text-ash">points</span>
+        </label>
+
+        <label className="flex items-center gap-2">
+          <span className="text-[12px] text-ash">Closes</span>
+          <input
+            type="datetime-local"
+            className="field-input py-1 text-[12.5px] w-auto"
+            value={closesAt}
+            onChange={(e) => setClosesAt(e.target.value)}
+          />
+        </label>
+        {/* No closing time is a real answer, not a blank to be filled: plenty
+            of questions close when somebody knows the answer, not at a time
+            anybody can name in advance. */}
+        <span className="text-[11.5px] text-ash/60">leave blank to close it by hand</span>
+      </div>
+
+      <div className="flex gap-2">
+        <Button type="submit" disabled={saving}>{saving ? 'Posting…' : 'Post it'}</Button>
+        <Button variant="ghost" type="button" onClick={onCancel}>Cancel</Button>
+      </div>
+    </form>
+  );
+}
+
 // ── One match ───────────────────────────────────────────────────────────────
 function Match({ m, busy, locked, onPick, onClear }) {
+  const [who, setWho] = useState(null);
+  const [showing, setShowing] = useState(false);
   const mine = m.mine;
   const sides = [
     { team: m.team_a, wins: m.series?.winsA ?? 0 },
@@ -317,6 +739,52 @@ function Match({ m, busy, locked, onPick, onClear }) {
       </div>
 
       <Crowd crowd={m.crowd} a={m.team_a} b={m.team_b} />
+
+      {/* Only once it is locked. While picks are still open, showing who has
+          called what turns the match into a poll people copy. */}
+      {!m.window?.open && m.crowd?.total > 0 && (
+        <div className="mt-1.5">
+          <button
+            onClick={async () => {
+              setShowing((x) => !x);
+              if (who || showing) return;
+              try {
+                const { data: d } = await api.get(`/api/predictions/match/${m.key}/picks`);
+                setWho(d.rows || []);
+              } catch {
+                setWho([]);
+              }
+            }}
+            className="text-[11.5px] text-ash hover:text-bone underline underline-offset-2"
+          >
+            {showing ? 'hide who' : 'who called it'}
+          </button>
+
+          {showing && (
+            who === null
+              ? <div className="mt-1.5 text-[12px] text-ash">Loading…</div>
+              : (
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                  {who.map((r, i) => {
+                    const team = [m.team_a, m.team_b].find((t) => t?.id === r.team_id);
+                    return (
+                      <span key={`${r.name}-${i}`} className="text-[12px]">
+                        <span className={r.correct ? 'text-verdigris' : 'text-ash'}>{r.name}</span>
+                        {r.is_me && <span className="text-crimsonbright text-[10px] ml-1">you</span>}
+                        <span className="text-ash/60 text-[11px] ml-1.5">
+                          {team?.tag || team?.name} {scorelineLabel(m.best_of, r.loser_games)}
+                        </span>
+                        {r.settled && r.points > 0 && (
+                          <span className="text-verdigris text-[10px] ml-1">+{r.points}</span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              )
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -433,6 +901,7 @@ function Standings({ table }) {
               <th className="text-right font-normal px-4 py-2">Points</th>
               <th className="text-right font-normal px-4 py-2">Correct</th>
               <th className="text-right font-normal px-4 py-2">Exact</th>
+              <th className="text-right font-normal px-4 py-2">Questions</th>
               <th className="text-right font-normal px-4 py-2 whitespace-nowrap">Champion</th>
             </tr>
           </thead>
@@ -450,6 +919,12 @@ function Standings({ table }) {
                 <td className="px-4 py-2 text-right mono">{r.points}</td>
                 <td className="px-4 py-2 text-right mono text-ash">{r.correct}</td>
                 <td className="px-4 py-2 text-right mono text-ash">{r.exact}</td>
+                {/* Right out of answered, because "3" on its own cannot be
+                    read — three of three is a different person to three of
+                    eleven. */}
+                <td className="px-4 py-2 text-right mono text-ash">
+                  {r.answers ? `${r.questions_correct}/${r.answers}` : '—'}
+                </td>
                 <td className="px-4 py-2 text-right">
                   {r.champion_hit
                     ? <span className="text-verdigris text-[12px]">+{r.champion_points}</span>

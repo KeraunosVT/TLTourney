@@ -166,6 +166,7 @@ app.use('/api/organizer/bracket', requireOrganizer, bracket.organizerRouter);
 // a few dozen small rows.
 app.use('/api/organizer/results', requireOrganizer, results.organizerRouter);
 app.use('/api/organizer/draft', requireOrganizer, draft.organizerRouter);
+app.use('/api/organizer/predictions', requireOrganizer, predictions.organizerRouter);
 app.use('/api/organizer', requireOrganizer, organizerRouter);
 
 // ── Static frontend ─────────────────────────────────────────────────────────

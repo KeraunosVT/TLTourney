@@ -203,6 +203,114 @@ function scorePick(pick, match) {
   return out;
 }
 
+// ── Questions an organizer writes ───────────────────────────────────────────
+// The match picks are the same question over and over; these are whatever else
+// is worth asking. "Does the grand final go to a reset?", "Which team tops the
+// damage chart?", "How many games does the final run?"
+//
+// MULTIPLE CHOICE, always. A free-text answer has to be graded by hand and
+// argued about — "HAM" against "The Hamstars" against "hamstars" are one answer
+// typed three ways, and somebody has to decide that at midnight. A fixed set of
+// options makes the scoring mechanical, which is the only way "who got it
+// right" is a fact rather than an opinion.
+const QUESTION_POINTS = 10;
+const MIN_OPTIONS = 2;
+const MAX_OPTIONS = 8;
+
+/** Is this question still open, and if not, why? */
+function questionWindow(q, now = Date.now()) {
+  if (!q) return { open: false, reason: 'No such question.' };
+  if (q.void) return { open: false, reason: 'Voided — nobody scores this one.', done: true };
+  if (q.correct_option_id) return { open: false, reason: 'Settled.', done: true };
+
+  if (q.closes_at) {
+    const at = new Date(q.closes_at).getTime();
+    if (Number.isFinite(at) && now >= at) {
+      return { open: false, reason: 'Closed — waiting on the answer.' };
+    }
+    return { open: true, closesAt: q.closes_at };
+  }
+
+  // No closing time: open until an organizer settles it. That is the right
+  // default for a question whose moment is not on a schedule — "does the reset
+  // happen" closes when somebody answers it, not at eight o'clock.
+  return { open: true, closesAt: null };
+}
+
+/**
+ * Whether the names on a question may be shown.
+ *
+ * Counts while it is open, names once it is not. Revealing who picked what
+ * while picking is still allowed would turn every question into a poll people
+ * copy — and the whole point is what each person thought.
+ */
+const answersVisible = (q, now = Date.now()) => !questionWindow(q, now).open;
+
+/** Score one answer. Unsettled scores nothing rather than scoring zero. */
+function scoreAnswer(answer, question) {
+  const out = { settled: false, points: 0, correct: false };
+  if (!answer || !question || question.void) return out;
+  if (!question.correct_option_id) return out;
+
+  out.settled = true;
+  if (answer.option_id === question.correct_option_id) {
+    out.correct = true;
+    // A stored value of null must not read as a question worth nothing.
+    // Number(null) is 0 and 0 is finite, so "is it a number" is the wrong
+    // test — questionProblem refuses anything below 1, so a zero here is
+    // always an absence rather than somebody's choice.
+    const stored = Number(question.points);
+    out.points = Number.isInteger(stored) && stored > 0 ? stored : QUESTION_POINTS;
+  }
+  return out;
+}
+
+/** How the room answered — counts per option, plus percentages. */
+function answerSplit(answers, question) {
+  const counts = new Map((question?.options || []).map((o) => [o.id, 0]));
+  let total = 0;
+  for (const a of answers) {
+    if (a.question_id !== question?.id) continue;
+    if (!counts.has(a.option_id)) continue;   // an option that has since been removed
+    counts.set(a.option_id, counts.get(a.option_id) + 1);
+    total += 1;
+  }
+  return (question?.options || []).map((o) => ({
+    option_id: o.id,
+    label: o.label,
+    count: counts.get(o.id) || 0,
+    pct: total ? Math.round((counts.get(o.id) / total) * 100) : null,
+  }));
+}
+
+/**
+ * What is wrong with a question an organizer is writing, in words, or null.
+ *
+ * Option IDS are not checked here — they are assigned by the server, so that
+ * relabelling an option cannot silently orphan the answers already given to it.
+ */
+function questionProblem({ prompt, options, points }) {
+  const text = String(prompt || '').trim();
+  if (!text) return 'A question needs a prompt.';
+  if (text.length > 200) return 'That prompt is too long — keep it under 200 characters.';
+
+  const list = Array.isArray(options) ? options : [];
+  const labels = list.map((o) => String(o?.label ?? '').trim()).filter(Boolean);
+  if (labels.length < MIN_OPTIONS) return `Give it at least ${MIN_OPTIONS} options.`;
+  if (labels.length > MAX_OPTIONS) return `${MAX_OPTIONS} options is the most a question can have.`;
+  if (new Set(labels.map((l) => l.toLowerCase())).size !== labels.length) {
+    return 'Two options say the same thing.';
+  }
+  if (labels.some((l) => l.length > 60)) return 'An option label is too long.';
+
+  if (points !== undefined && points !== null && points !== '') {
+    const n = Number(points);
+    if (!Number.isInteger(n) || n < 1 || n > 100) return 'Points must be a whole number between 1 and 100.';
+  }
+
+  return null;
+}
+
 // ── The standings ───────────────────────────────────────────────────────────
 /**
  * Everybody's total, in order.
@@ -216,9 +324,15 @@ function scorePick(pick, match) {
  * @param matches       bracket matches with `series` attached
  * @param championPicks [{ discord_id, display_name, team_id }]
  * @param championId    the tournament's champion, once there is one
+ * @param questions     organizer-written questions, with their options and answer
+ * @param answers       [{ discord_id, display_name, question_id, option_id }]
  */
-function standings({ picks = [], matches = [], championPicks = [], championId = null } = {}) {
+function standings({
+  picks = [], matches = [], championPicks = [], championId = null,
+  questions = [], answers = [],
+} = {}) {
   const byMatch = new Map(matches.map((m) => [m.id, m]));
+  const byQuestion = new Map(questions.map((q) => [q.id, q]));
   const people = new Map();
 
   const person = (discordId, name) => {
@@ -228,6 +342,7 @@ function standings({ picks = [], matches = [], championPicks = [], championId = 
         name: name || 'Someone',
         points: 0, correct: 0, exact: 0, settled: 0, picks: 0,
         champion_team_id: null, champion_hit: false, champion_points: 0,
+        answers: 0, questions_correct: 0, question_points: 0,
       });
     }
     const row = people.get(discordId);
@@ -247,6 +362,16 @@ function standings({ picks = [], matches = [], championPicks = [], championId = 
     row.points += scored.points;
     if (scored.correct) row.correct += 1;
     if (scored.exact) row.exact += 1;
+  }
+
+  for (const a of answers) {
+    const row = person(a.discord_id, a.display_name);
+    row.answers += 1;
+    const scored = scoreAnswer(a, byQuestion.get(a.question_id));
+    if (!scored.settled) continue;
+    row.points += scored.points;
+    row.question_points += scored.points;
+    if (scored.correct) row.questions_correct += 1;
   }
 
   for (const c of championPicks) {
@@ -319,7 +444,9 @@ function splitFromCounts(a = 0, b = 0) {
 
 module.exports = {
   WINNER_POINTS, SCORELINE_BONUS, CHAMPION_POINTS, MATCH_MAX,
+  QUESTION_POINTS, MIN_OPTIONS, MAX_OPTIONS,
   loserGameOptions, scorelineLabel, pickProblem,
-  pickWindow, championWindow,
-  scorePick, standings, crowdSplit, splitFromCounts,
+  pickWindow, championWindow, questionWindow, answersVisible,
+  scorePick, scoreAnswer, questionProblem, answerSplit,
+  standings, crowdSplit, splitFromCounts,
 };
