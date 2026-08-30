@@ -14,6 +14,7 @@ import Draft from './pages/Draft';
 import Bracket from './pages/Bracket';
 import Match from './pages/Match';
 import Leaderboard from './pages/Leaderboard';
+import Predictions from './pages/Predictions';
 import Player from './pages/Player';
 import Watch from './pages/Watch';
 import Pool from './pages/Pool';
@@ -54,6 +55,9 @@ function Shell() {
               page. */}
           <NavLink to="/draft" className={link}>Draft</NavLink>
           <NavLink to="/bracket" className={link}>Bracket</NavLink>
+          {/* Everyone, deliberately — the prediction game is for the people
+              watching as much as the people playing. */}
+          <NavLink to="/predictions" className={link}>Predictions</NavLink>
           <NavLink to="/leaderboard" className={link}>Leaderboard</NavLink>
           {/* Only a captain has one, so only a captain is offered one. The
               server refuses it either way — this just keeps a dead link off
@@ -145,6 +149,7 @@ export default function App() {
               <Route path="/draft" element={<Draft />} />
               <Route path="/bracket" element={<Bracket />} />
               <Route path="/match/:key" element={<Match />} />
+              <Route path="/predictions" element={<Predictions />} />
               <Route path="/leaderboard" element={<Leaderboard />} />
               <Route path="/player/:signupId" element={<Player />} />
               <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />

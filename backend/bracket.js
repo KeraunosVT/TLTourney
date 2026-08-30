@@ -13,6 +13,7 @@ const { generateBracket, applyResult, roundLabel } = require('../shared/bracket.
 const { seriesResult, gameSlots, isBestOf } = require('../shared/series.cjs');
 const { isMap, available, isPlayable, banList, banProblem } = require('../shared/maps.cjs');
 const { classify } = require('../shared/classes.cjs');
+const { splitFromCounts } = require('../shared/predictions.cjs');
 
 const COLS = 'id, key, bracket, round, idx, slot_a, slot_b, team_a_id, team_b_id, '
   + 'winner_team_id, loser_team_id, kind, advances, status, is_reset, scheduled_at, '
@@ -268,6 +269,31 @@ function featured(matches, asked) {
   return done[0] || real[0] || null;
 }
 
+/**
+ * The prediction split on one match, as two counts.
+ *
+ * Counted server-side with head requests, so no row and no name ever leaves the
+ * database for this — which is what makes it safe to put on an unauthenticated
+ * broadcast route. `crowdSplit` in shared/predictions.cjs draws the same bar
+ * from the picks themselves for the signed-in page; the percentages come from
+ * one shared function either way.
+ *
+ * Returns null rather than throwing when migration 016 has not been run. A
+ * missing prediction table must not take the broadcast down with it.
+ */
+async function crowdFor(match) {
+  if (!match?.team_a_id || !match?.team_b_id) return null;
+
+  const side = (teamId) => supabase.from('predictions')
+    .select('id', { count: 'exact', head: true })
+    .eq('match_id', match.id).eq('team_id', teamId);
+
+  const [a, b] = await Promise.all([side(match.team_a_id), side(match.team_b_id)]);
+  if (a.error || b.error) return null;
+
+  return splitFromCounts(a.count || 0, b.count || 0);
+}
+
 streamRouter.get('/', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
   const t = await currentTournament();
@@ -282,7 +308,17 @@ streamRouter.get('/', async (req, res) => {
 
     let rows = [];
     let game = null;
+    let crowd = null;
     if (focus) {
+      // How the room called this one. COUNTS ONLY, and only for the match on
+      // screen — a broadcast has no session, so there is nobody who could have
+      // agreed to being named on it. The standings, which do carry names, stay
+      // behind the login.
+      //
+      // Counted in the database rather than read back and counted here: it is
+      // two numbers, and a popular match is thousands of rows.
+      crowd = await crowdFor(focus);
+
       // The newest game that actually has a scoreboard — during a series that
       // is the one just played, which is what a broadcast is talking about.
       game = [...(focus.games || [])]
@@ -301,7 +337,9 @@ streamRouter.get('/', async (req, res) => {
       tournament: { name: t.name, status: t.status },
       ...state,
       serverTime: new Date().toISOString(),
-      focus: focus ? { ...focus, scoreboard: rows, scoreboardGame: game?.game_number ?? null } : null,
+      focus: focus
+        ? { ...focus, scoreboard: rows, scoreboardGame: game?.game_number ?? null, crowd }
+        : null,
     });
   } catch (err) {
     console.error('stream bracket read failed:', err.message);

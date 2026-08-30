@@ -40,6 +40,7 @@ export default defineConfig({
     include: [
       '@shared/classes.cjs', '@shared/roles.cjs',
       '@shared/captains.cjs', '@shared/board.cjs', '@shared/scoreboard.cjs',
+      '@shared/series.cjs', '@shared/maps.cjs', '@shared/predictions.cjs',
     ],
     entries: ['src/**/*.jsx'],
   },

@@ -40,6 +40,26 @@ export default function MatchScene({ focus, teams }) {
             <span className="mono text-[2.6vh] text-dim shrink-0">vs</span>
             <Side team={b} wins={s.winsB} won={s.winnerId === focus.team_b_id} align="right" />
           </div>
+
+          {/* How the room called it — a talking point a commentator can use
+              without asking anybody for a number. Counts only: this scene has
+              no session behind it, so no name on it could have been consented
+              to. It is absent, not zeroed, when nobody has picked. */}
+          {focus.crowd?.total > 0 && (
+            <div className="mt-[1.4vh]">
+              <div className="flex h-[0.7vh] rounded overflow-hidden bg-panelup">
+                <div className="bg-crimson" style={{ width: `${focus.crowd.pct_a}%` }} />
+                <div className="bg-bone/40" style={{ width: `${focus.crowd.pct_b}%` }} />
+              </div>
+              <div className="flex justify-between text-[1.05vh] text-ash mt-[0.5vh]">
+                <span>{focus.crowd.pct_a}%</span>
+                <span className="uppercase tracking-[0.2em]">
+                  {focus.crowd.total} viewer pick{focus.crowd.total === 1 ? '' : 's'}
+                </span>
+                <span>{focus.crowd.pct_b}%</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Games, with the map each was played on. */}

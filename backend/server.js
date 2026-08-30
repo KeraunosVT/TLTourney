@@ -20,6 +20,7 @@ const board = require('./board');
 const draft = require('./draft');
 const bracket = require('./bracket');
 const results = require('./results');
+const predictions = require('./predictions');
 const { currentTournament, supabase } = require('./db');
 
 const app = express();
@@ -149,6 +150,12 @@ app.use('/api/draft', (req, res, next) => (req.method === 'GET' ? next() : board
 
 app.use('/api/bracket', bracket.router);
 app.use('/api/stats', results.router);
+
+// Predictions are open to anyone with a session, players and viewers alike —
+// that is the point of them. Writes share the signup limiter's allowance: a
+// pick is a small write that nobody makes thirty times a minute, and the GET is
+// exempt because the page re-reads after every change.
+app.use('/api/predictions', (req, res, next) => (req.method === 'GET' ? next() : writeLimiter(req, res, next)), predictions.router);
 
 app.use('/api/organizer/teams', requireOrganizer, teams.organizerRouter);
 app.use('/api/organizer/bracket', requireOrganizer, bracket.organizerRouter);

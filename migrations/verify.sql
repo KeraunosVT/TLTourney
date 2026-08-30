@@ -432,4 +432,36 @@ union all
 select '015 · every played match banned at least two',
        not exists (select 1 from matches m
                    where m.status = 'complete' and m.kind = 'match'
-                     and cardinality(m.bans_a) + cardinality(m.bans_b) < 2);
+                     and cardinality(m.bans_a) + cardinality(m.bans_b) < 2)
+union all
+-- ── 016 ────────────────────────────────────────────────────────────────────
+select '016 · predictions and champion_picks exist',
+       (select count(*) = 2 from information_schema.tables
+         where table_schema = 'public'
+           and table_name in ('predictions', 'champion_picks'))
+union all
+-- The integrity of the whole game. Without it, changing a pick inserts a second
+-- row and the standings count both, so anyone who changed their mind scores
+-- twice — and nothing on any screen would look wrong.
+select '016 · one prediction per person per match',
+       exists (select 1 from pg_constraint where conname = 'predictions_one_per_match')
+union all
+select '016 · one champion pick per person',
+       exists (select 1 from pg_constraint where conname = 'champion_picks_one_per_person')
+union all
+-- A scoreline the match could not have produced. The app checks this against
+-- each match's own best_of, which a CHECK cannot reach; this is the same rule
+-- applied after the fact, where the join is available.
+select '016 · no prediction of an impossible scoreline',
+       not exists (select 1 from predictions p
+                   join matches m on m.id = p.match_id
+                   where p.loser_games >= (m.best_of / 2) + 1)
+union all
+-- A pick that landed after its match started would be a hole in the lock. Only
+-- checkable where a kickoff time was set, which is the case that matters: an
+-- unscheduled match locks on its first game row instead, and that has no
+-- timestamp to compare against.
+select '016 · no pick was saved after kickoff',
+       not exists (select 1 from predictions p
+                   join matches m on m.id = p.match_id
+                   where m.scheduled_at is not null and p.updated_at > m.scheduled_at);
