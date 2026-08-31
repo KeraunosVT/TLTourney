@@ -18,6 +18,7 @@ import Predictions from './pages/Predictions';
 import Player from './pages/Player';
 import Watch from './pages/Watch';
 import Pool from './pages/Pool';
+import Lower from './pages/Lower';
 
 function Shell() {
   const { user, logout } = useAuth();
@@ -142,6 +143,12 @@ export default function App() {
                 same reason /watch is: a viewer typing it in has no session, and
                 a producer pointing a second OBS source at it has no cookie. */}
             <Route path="/pool" element={<Pool />} />
+
+            {/* Public for the same reason again, and one more: this one is
+                meant to be composited OVER gameplay, so it is a transparent
+                overlay rather than a scene you cut to. It reads the same cast
+                route the bracket scene does. */}
+            <Route path="/lower" element={<Lower />} />
 
             <Route element={<Gate />}>
               <Route index element={<Navigate to="/signup" replace />} />

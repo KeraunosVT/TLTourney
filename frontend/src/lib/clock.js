@@ -112,3 +112,21 @@ export function humanDuration(seconds) {
   if (h === 0) return `${m}m`;
   return `${h}h ${String(m).padStart(2, '0')}m`;
 }
+
+/**
+ * Time until something, at the resolution somebody actually wants it.
+ *
+ * "2h 14m" an hour out, "4:37" in the last stretch. Two formats rather than
+ * one because they answer different questions: far away, nobody is counting
+ * seconds and a ticking mm:ss is noise on a broadcast; close in, the seconds
+ * are the whole point and "0m" is useless.
+ *
+ * Lives here beside the other two rather than in the page that needed it,
+ * because a fourth private copy of "how long is that" is a fourth chance to
+ * round it differently.
+ */
+export function countdownLabel(seconds) {
+  if (seconds === null || seconds === undefined) return '—';
+  if (seconds <= 0) return 'now';
+  return seconds < 600 ? mmss(seconds) : humanDuration(seconds);
+}
