@@ -122,13 +122,26 @@ export default function Lower() {
     return () => clearInterval(id);
   }, [load]);
 
-  // ── Rotation ──────────────────────────────────────────────────────────────
+  // ── Rotation, or a stack ──────────────────────────────────────────────────
+  // Two ways to ask for more than one card, and they answer different
+  // questions. A ROTATION is one strip that changes its subject — right when
+  // you want a single line of furniture that keeps finding something new to
+  // say. A STACK is several strips at once — right when the cards belong
+  // together and a caster wants to glance at all of them, at the cost of more
+  // of the screen.
+  //
+  // In a stack the URL's order is the order down the screen, whichever end it
+  // is anchored to: type=bans,matchup,series puts bans on top and series at
+  // the bottom, from the top of the frame or up from the bottom of it. Any
+  // other rule would mean reading the URL backwards half the time.
+  const stack = params.get('stack') === '1';
+
   const [step, setStep] = useState(0);
   useEffect(() => {
-    if (wanted.length < 2) return undefined;
+    if (stack || wanted.length < 2) return undefined;
     const id = setInterval(() => setStep((n) => n + 1), every);
     return () => clearInterval(id);
-  }, [wanted.length, every]);
+  }, [stack, wanted.length, every]);
 
   const focus = data?.focus || null;
   const teams = useMemo(
@@ -153,26 +166,44 @@ export default function Lower() {
   // to notice and remove mid-broadcast.
   if (!current) return <Legend wanted={wanted} ready={ready} />;
 
+  const showing = stack ? ready : [current];
+
+  const card = (type) => {
+    switch (type) {
+      case 'matchup': return <Matchup focus={focus} a={a} b={b} />;
+      case 'crowd': return <Crowd focus={focus} a={a} b={b} />;
+      case 'series': return <Series focus={focus} teams={teams} />;
+      case 'player': return <Player row={player} teams={teams} game={focus?.scoreboardGame} />;
+      case 'bans': return <Bans focus={focus} a={a} b={b} />;
+      case 'next': return <Next match={next} teams={teams} serverTime={data?.serverTime} />;
+      default: return null;
+    }
+  };
+
   return (
     <div
-      className={`fixed inset-x-0 flex px-[1.6em] ${top ? 'top-0 pt-[1.4em]' : 'bottom-0 pb-[1.4em]'} ${
-        align === 'center' ? 'justify-center' : align === 'right' ? 'justify-end' : 'justify-start'
-      }`}
+      className={`fixed inset-x-0 flex flex-col gap-[0.45em] px-[1.6em] ${
+        top ? 'top-0 pt-[1.4em]' : 'bottom-0 pb-[1.4em]'
+      } ${align === 'center' ? 'items-center' : align === 'right' ? 'items-end' : 'items-start'}`}
       // One number feeds the whole strip: everything below is in em.
       style={{ fontSize: `${scale}vw` }}
     >
-      {/* Keyed on the card so React remounts it — which replays the entrance
-          on every change rather than only the first. */}
-      <Strip key={current} demo={demo}>
-        {current === 'matchup' && <Matchup focus={focus} a={a} b={b} />}
-        {current === 'crowd' && <Crowd focus={focus} a={a} b={b} />}
-        {current === 'series' && <Series focus={focus} teams={teams} />}
-        {current === 'player' && <Player row={player} teams={teams} game={focus?.scoreboardGame} />}
-        {current === 'bans' && <Bans focus={focus} a={a} b={b} />}
-        {current === 'next' && <Next match={next} teams={teams} serverTime={data?.serverTime} />}
-      </Strip>
+      {showing.map((type, i) => (
+        // Keyed on the card so React remounts it — which replays the entrance
+        // on every change rather than only the first.
+        //
+        // The stagger is small and only exists in a stack: three strips
+        // arriving together read as one block landing, which is heavier than
+        // it needs to be over live footage. Sixty milliseconds apart and they
+        // arrive as a sequence instead.
+        // The demo badge goes on the first strip only. One is enough to stop
+        // invented data reaching air; three is a stack wearing a uniform.
+        <Strip key={type} demo={demo && i === 0} delay={stack ? i * 60 : 0}>
+          {card(type)}
+        </Strip>
+      ))}
 
-      <Legend wanted={wanted} ready={ready} showing={current} />
+      <Legend wanted={wanted} ready={ready} showing={stack ? ready.join(' + ') : current} />
     </div>
   );
 }
@@ -206,6 +237,9 @@ function Legend({ wanted, ready, showing }) {
       {showing && <div><span className="text-dim">showing:</span> {showing}</div>}
       <div className="mt-1 text-dim">
         ?type=matchup,crowd&amp;every=10&amp;pos=bottom&amp;align=left&amp;scale=1&amp;match=W2-0
+      </div>
+      <div className="text-dim">
+        add <span className="text-ash">&amp;stack=1</span> to show them all at once, in URL order
       </div>
     </div>
   );
@@ -300,10 +334,15 @@ function spotlight(focus, pinned) {
 // has to hold up against a bright sky and a spell effect equally. The crimson
 // edge is the brand's one saturated element and does the work of saying whose
 // broadcast this is without a logo taking up room.
-function Strip({ children, demo }) {
+function Strip({ children, demo, delay = 0 }) {
   return (
-    <div className="lower-in flex items-stretch max-w-[92vw] rounded-[0.3em] overflow-hidden
-                    shadow-[0_0.3em_1.6em_rgba(0,0,0,0.55)]">
+    <div
+      className="lower-in flex items-stretch max-w-[92vw] rounded-[0.3em] overflow-hidden
+                 shadow-[0_0.3em_1.6em_rgba(0,0,0,0.55)]"
+      // `both` so a delayed strip holds its opening frame instead of flashing
+      // at full opacity and then animating.
+      style={delay ? { animationDelay: `${delay}ms`, animationFillMode: 'both' } : undefined}
+    >
       <div className="w-[0.28em] bg-crimson shrink-0" />
       <div className="bg-ink/85 backdrop-blur-[2px] border-y border-r border-line/70
                       px-[1.1em] py-[0.7em] flex items-center gap-[1.2em] min-w-0">
