@@ -46,6 +46,31 @@ export default function Teams() {
     }
   }
 
+  // Renaming is allowed at any point, draft or no draft — the draft freezes
+  // WHICH teams exist and in what order, and it snapshots their ids, never
+  // their names. Every screen reads the name live, so a typo fixed in round
+  // nine is fixed on the bracket, the overlay and the standings at once.
+  //
+  // Returns whether it saved, so the row can stay open on a rejected name
+  // rather than closing over the text somebody has to retype.
+  async function rename(team, fields) {
+    setBusy(team.id);
+    setBanner(null);
+    try {
+      await api.put(`/api/organizer/teams/${team.id}`, fields);
+      await load();
+      return true;
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+      // A conflict is another team holding that name or tag — which may have
+      // happened since this page loaded, so refetch before they try again.
+      if (err?.response?.status === 409) load();
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function addCaptain(team, seat, signupId) {
     setBusy(team.id);
     setBanner(null);
@@ -165,10 +190,11 @@ export default function Teams() {
                 </div>
 
                 <div className="flex-1 min-w-[200px]">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-display text-[17px]">{t.name}</span>
-                    {t.tag && <span className="mono text-[11px] text-crimson">{t.tag}</span>}
-                  </div>
+                  <TeamName
+                    team={t}
+                    busy={busy === t.id}
+                    onSave={(fields) => rename(t, fields)}
+                  />
                   {/* One row per seat, always both, filled or not — an empty
                       co-captain seat is a thing to notice, and it disappears
                       entirely if empty seats aren't drawn. */}
@@ -287,6 +313,95 @@ export default function Teams() {
         </div>
       </div>
     </div>
+  );
+}
+
+// The name, which only becomes an input once you ask for it. A team is renamed
+// maybe once — a typo a captain spotted, or a roster that picked a better name
+// after the draft — and a permanent pair of text boxes on every row would put a
+// dozen open fields on a page whose actual job is seating captains.
+//
+// Name and tag edit TOGETHER because they change together: the tag is the short
+// form of the name, and a team renamed from Iron Vow to Iron Oath still showing
+// IRV on the bracket is exactly the mistake this exists to fix. Two separate
+// pencils would make keeping them in step an extra thing to remember.
+function TeamName({ team, busy, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(team.name);
+  const [tag, setTag] = useState(team.tag || '');
+
+  // Opening starts from what the team is called NOW, not from whatever was
+  // typed and abandoned last time this row was open.
+  function open() {
+    setName(team.name);
+    setTag(team.tag || '');
+    setEditing(true);
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-display text-[17px]">{team.name}</span>
+        {team.tag && <span className="mono text-[11px] text-crimson">{team.tag}</span>}
+        <button
+          onClick={open}
+          disabled={busy}
+          className="text-[11px] text-ash hover:text-crimsonbright underline underline-offset-2
+                     disabled:opacity-45"
+        >
+          rename
+        </button>
+      </div>
+    );
+  }
+
+  async function commit(e) {
+    e?.preventDefault();
+    const nextName = name.trim();
+    const nextTag = tag.trim().toUpperCase();
+    if (!nextName) return;
+
+    // Nothing actually changed. Close quietly rather than spend a request and
+    // get "Nothing to change" back for having opened the row and thought better
+    // of it.
+    if (nextName === team.name && nextTag === (team.tag || '')) {
+      setEditing(false);
+      return;
+    }
+    if (await onSave({ name: nextName, tag: nextTag })) setEditing(false);
+  }
+
+  // Escape abandons from either field — the way out of an edit somebody opened
+  // by mistake, without hunting for Cancel.
+  const escapes = (e) => { if (e.key === 'Escape') setEditing(false); };
+
+  return (
+    <form className="flex items-center gap-2 flex-wrap" onSubmit={commit}>
+      <input
+        autoFocus
+        className="field-input py-1 text-[14px] max-w-[210px]"
+        value={name}
+        maxLength={40}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={escapes}
+        aria-label={`Name for ${team.name}`}
+      />
+      <input
+        className="field-input mono py-1 text-[12px] w-[84px] uppercase"
+        value={tag}
+        maxLength={6}
+        placeholder="tag"
+        onChange={(e) => setTag(e.target.value)}
+        onKeyDown={escapes}
+        aria-label={`Tag for ${team.name}`}
+      />
+      <Button type="submit" disabled={!name.trim() || busy} className="py-1">
+        {busy ? 'Saving…' : 'Save'}
+      </Button>
+      <Button variant="ghost" type="button" disabled={busy} onClick={() => setEditing(false)} className="py-1">
+        Cancel
+      </Button>
+    </form>
   );
 }
 
