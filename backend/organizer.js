@@ -405,4 +405,78 @@ router.get('/hierarchy', async (req, res) => {
   }
 });
 
+// ── Audit log ────────────────────────────────────────────────────────────────
+// Every organizer decision, written by `audit()` in db.js — approvals,
+// rejections, team and captain changes, draft picks, bracket results,
+// scoreboard commits. It has been write-only since the day it started
+// accumulating: this is the one route that reads it back.
+//
+// A tournament runs long enough, and with enough organizers touching the
+// queue at once, that "who decided this and when" is a real question on the
+// night — and the log already has the answer sitting there.
+//
+// Keyset-paginated on `id` (a bigserial, so it is also a stable recency
+// order) rather than offset paging: an offset page shifts under a log that is
+// actively being written to while somebody scrolls it, and a keyset cursor
+// does not. `fetchAll`'s bounded reads are for something else — this route
+// deliberately hands back ONE page and asks for the next explicitly, because
+// an audit log has no natural end and a page that "reads everything" here
+// would mean reading a growing table start to finish on every request.
+const AUDIT_COLS = 'id, actor_id, actor_name, action, target, detail, created_at';
+const AUDIT_PAGE_SIZE = 100;
+const AUDIT_MAX_PAGE_SIZE = 300;
+
+// Pure, and exported for the test: what limit a request actually gets, given
+// what it asked for. Bounded on both ends — too low and a page is mostly round
+// trips, too high and one request reads a chunk of an unbounded table.
+function clampAuditLimit(raw) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return AUDIT_PAGE_SIZE;
+  return Math.min(AUDIT_MAX_PAGE_SIZE, Math.max(1, n));
+}
+
+// The cursor is the id of the OLDEST row already shown — "give me the page
+// after this one". Returns null for "no cursor" (the first page) and
+// undefined for "this isn't a cursor at all" (a bad request), which is the
+// distinction the route needs and a single null can't carry.
+function parseAuditCursor(raw) {
+  if (raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 ? n : undefined;
+}
+
+router.get('/audit', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+
+  const limit = clampAuditLimit(req.query.limit);
+  const before = parseAuditCursor(req.query.before);
+  if (before === undefined) return res.status(400).json({ error: 'That is not a valid cursor.' });
+
+  let query = supabase.from('audit_log').select(AUDIT_COLS)
+    .order('id', { ascending: false }).limit(limit + 1);
+  if (before) query = query.lt('id', before);
+
+  const { data, error } = await query;
+  if (error) {
+    console.error('audit read failed:', error.message);
+    if (/schema cache|does not exist|relation/i.test(error.message)) {
+      return res.status(503).json({
+        error: 'The audit log table is missing — run migrations/001_signups.sql in the Supabase SQL editor.',
+      });
+    }
+    return res.status(500).json({ error: 'Could not read the audit log.' });
+  }
+
+  const rows = data || [];
+  // Asked for one extra row on purpose: its PRESENCE is the "is there more"
+  // signal, and it is never sent to the browser — a page that returns exactly
+  // `limit` rows looks identical whether or not there is a next one, and
+  // "Load more" would have nothing to go on without this.
+  const hasMore = rows.length > limit;
+  res.json({ rows: rows.slice(0, limit), hasMore });
+});
+
 module.exports = router;
+module.exports.clampAuditLimit = clampAuditLimit;
+module.exports.parseAuditCursor = parseAuditCursor;
+
