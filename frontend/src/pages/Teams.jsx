@@ -109,6 +109,47 @@ export default function Teams() {
     }
   }
 
+  // A no-show replaced, an injury, someone added after the draft finished.
+  // Goes through the same addToRoster door as a captain seat or a draft pick —
+  // the server clears them off every board and says how many, which is worth
+  // surfacing for the same reason a captain seating does.
+  async function addToRosterManually(team, signupId) {
+    setBusy(team.id);
+    setBanner(null);
+    try {
+      const { data } = await api.post(`/api/organizer/teams/${team.id}/roster`, { signup_id: signupId });
+      await load();
+      if (data?.clearedFrom > 0) {
+        setBanner({
+          tone: 'good',
+          text: `Added. They were removed from ${data.clearedFrom} draft board${data.clearedFrom === 1 ? '' : 's'} — they're no longer available to draft.`,
+        });
+      }
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+      if (err?.response?.status === 409) load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Only ever offered for a 'manual' entry — the server refuses a captain seat
+  // or a draft pick here regardless, but the button is hidden for those too so
+  // clicking it doesn't exist as a way to learn that the hard way.
+  async function removeFromRoster(team, member) {
+    if (!window.confirm(`Remove ${member.player_name} from ${team.name}'s roster?`)) return;
+    setBusy(team.id);
+    setBanner(null);
+    try {
+      await api.delete(`/api/organizer/teams/${team.id}/roster/${member.id}`);
+      await load();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function remove(team) {
     if (!window.confirm(`Delete ${team.name}? This cannot be undone.`)) return;
     setBusy(team.id);
@@ -245,7 +286,7 @@ export default function Teams() {
                     })}
                   </div>
 
-                  <Roster team={t} />
+                  <Roster team={t} candidates={candidates} busy={busy === t.id} onAdd={addToRosterManually} onRemove={removeFromRoster} />
                 </div>
 
                 <Button variant="ghost" onClick={() => remove(t)} disabled={busy === t.id}>Delete</Button>
@@ -408,34 +449,78 @@ function TeamName({ team, busy, onSave }) {
 // Who plays for this team. Captains are on it from the moment they're seated —
 // they're not spectators, they're two of the sixty — which is also why they
 // stop appearing in every other captain's available players.
-function Roster({ team }) {
+//
+// A manual add/remove sits here too, rather than as its own panel, because a
+// no-show is dealt with while looking at the roster it broke — not on a
+// separate screen with its own copy of who's already on a team.
+function Roster({ team, candidates, busy, onAdd, onRemove }) {
   const members = team.roster || [];
   const p = team.progress;
-  if (members.length === 0) return null;
 
   return (
     <div className="mt-2.5 pt-2.5 border-t border-line/40">
-      <div className="flex items-baseline gap-2 flex-wrap">
-        <span className="text-[10px] uppercase tracking-[0.14em] text-ash">Roster</span>
-        <span className="mono text-[12px]">
-          {p?.filled ?? members.length}<span className="text-ash">/{p?.size ?? '—'}</span>
+      {members.length > 0 && (
+        <>
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="text-[10px] uppercase tracking-[0.14em] text-ash">Roster</span>
+            <span className="mono text-[12px]">
+              {p?.filled ?? members.length}<span className="text-ash">/{p?.size ?? '—'}</span>
+            </span>
+            {p?.remaining > 0 && (
+              <span className="text-[11px] text-ash">{p.remaining} still to draft</span>
+            )}
+          </div>
+          <div className="mt-1.5 flex gap-1.5 flex-wrap">
+            {members.map((m) => (
+              <span
+                key={m.id}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-line
+                           bg-panelup text-[11.5px]"
+                title={`${m.role || 'role not set'}${m.classes?.[0] ? ` · ${m.classes[0]}` : ''}`}
+              >
+                {m.via === 'captain' && <span className="text-crimson text-[9px]">★</span>}
+                {m.player_name}
+                {/* A captain seat and a draft pick each have their own, more
+                    correct way to leave — offering this button for them would
+                    only send the click to a 409 the person clicking it can't
+                    see coming. */}
+                {m.via === 'manual' && (
+                  <button
+                    onClick={() => onRemove(team, m)}
+                    disabled={busy}
+                    className="ml-0.5 text-ash hover:text-crimsonbright leading-none"
+                    aria-label={`Remove ${m.player_name} from ${team.name}`}
+                    title="Remove from roster"
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+
+      <div className="mt-2 flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] uppercase tracking-[0.14em] text-ash w-[74px] flex-none">
+          Add player
         </span>
-        {p?.remaining > 0 && (
-          <span className="text-[11px] text-ash">{p.remaining} still to draft</span>
-        )}
-      </div>
-      <div className="mt-1.5 flex gap-1.5 flex-wrap">
-        {members.map((m) => (
-          <span
-            key={m.id}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-line
-                       bg-panelup text-[11.5px]"
-            title={`${m.role || 'role not set'}${m.classes?.[0] ? ` · ${m.classes[0]}` : ''}`}
-          >
-            {m.via === 'captain' && <span className="text-crimson text-[9px]">★</span>}
-            {m.player_name}
-          </span>
-        ))}
+        <select
+          className="field-input py-1 text-[12.5px] max-w-[260px]"
+          value=""
+          disabled={busy || candidates.length === 0}
+          onChange={(e) => e.target.value && onAdd(team, e.target.value)}
+          aria-label={`Add a player to ${team.name}'s roster`}
+        >
+          <option value="">
+            {candidates.length ? '— add a substitute or replacement —' : '— nobody available —'}
+          </option>
+          {candidates.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.player_name}{c.role ? ` — ${c.role}` : ''}
+            </option>
+          ))}
+        </select>
       </div>
     </div>
   );
