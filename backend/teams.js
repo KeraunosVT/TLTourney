@@ -592,6 +592,115 @@ organizerRouter.delete('/:id/captains/:signupId', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Manual roster changes ───────────────────────────────────────────────────
+// For everything the draft and the captain seats don't cover: a no-show
+// replaced the morning of the bracket, an injury, someone who has to leave a
+// team after the draft is long over. Both routes go through addToRoster, the
+// one door onto a team — a manual add clears the player off every board
+// exactly like a draft pick does, because they are just as unavailable to
+// draft as one.
+//
+// Deliberately does NOT enforce roster_size as a ceiling. A sub added to cover
+// somebody who can't make one match is a team temporarily one over its own
+// number, which is a real and legitimate shape for a roster to be in — not an
+// error to refuse at the door.
+
+// Add someone who is not already on a roster. Checked against the pool the
+// same way a captain seat and a draft pick are: an approved signup in THIS
+// tournament, never trusted from the body.
+organizerRouter.post('/:id/roster', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  // The draft's round count is fixed to what each roster held when it started;
+  // adding a body mid-draft would give one team an extra pick's worth of
+  // players that the snake order was never built to expect.
+  if (await draftUnderWay(t.id)) return res.status(409).json({ error: DRAFT_FROZEN });
+
+  const { data: team } = await supabase
+    .from('teams').select('id, name').eq('id', req.params.id).eq('tournament_id', t.id).maybeSingle();
+  if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+  const { data: signup, error: sErr } = await supabase
+    .from('player_signups').select('id, status, player_name, discord_id')
+    .eq('id', req.body?.signup_id || '00000000-0000-0000-0000-000000000000')
+    .eq('tournament_id', t.id).maybeSingle();
+  if (sErr) return res.status(500).json({ error: 'Could not check that player.' });
+  if (!signup) return res.status(400).json({ error: 'That player has not signed up for this tournament.' });
+  if (signup.status !== 'approved') {
+    return res.status(400).json({ error: `${signup.player_name} is not approved yet — approve their signup first.` });
+  }
+
+  const { error: rosterErr, cleared } = await addToRoster(t.id, team.id, signup.id, 'manual');
+  if (rosterErr) {
+    const msg = conflictMessage(rosterErr);
+    console.error('manual roster add failed:', rosterErr.message);
+    return res.status(msg ? 409 : 500).json({ error: msg || 'Could not add them to the roster.' });
+  }
+
+  await audit(req.user, 'team.roster.add', team.id, {
+    team: team.name, player: signup.player_name, discord_id: signup.discord_id,
+    cleared_from_boards: cleared.length,
+  });
+  res.json({
+    member: { id: signup.id, player_name: signup.player_name, via: 'manual' },
+    // Same reason a captain seating reports it: other captains just lost this
+    // name off their board, and that is worth saying rather than discovering.
+    clearedFrom: cleared.length,
+  });
+});
+
+// Take someone off a roster who is on it because of a MANUAL add — never a
+// captain's seat (that has its own endpoint, which also removes the
+// captaincy) and never a draft pick.
+//
+// A drafted player is refused on purpose. draft.js's reconcile() treats every
+// draft_picks row with no matching roster row as a crash it needs to repair,
+// and repairs it by writing the roster row straight back — see the orphan
+// handling there. Deleting a drafted player's roster row here would not
+// remove them, it would just cost a few seconds until the next draft read put
+// them back, with no error and no visible cause. If a drafted player has to
+// leave a roster, add their replacement alongside them instead — the pick
+// stays on the historical record, which is what it is: a real, on-the-record
+// event of a captain choosing that player.
+organizerRouter.delete('/:id/roster/:signupId', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  if (await draftUnderWay(t.id)) return res.status(409).json({ error: DRAFT_FROZEN });
+
+  const { data: row } = await supabase
+    .from('team_players').select('id, via, signup:player_signups (player_name)')
+    .eq('tournament_id', t.id).eq('team_id', req.params.id).eq('signup_id', req.params.signupId)
+    .maybeSingle();
+  if (!row) return res.status(404).json({ error: 'That player is not on this roster.' });
+
+  if (row.via === VIA_CAPTAIN) {
+    return res.status(409).json({
+      error: `${row.signup?.player_name || 'They'} are on this roster as a captain — remove the captain seat instead.`,
+    });
+  }
+  if (row.via === 'draft') {
+    return res.status(409).json({
+      error: `${row.signup?.player_name || 'They'} were drafted — that pick stays on the record. `
+        + 'Add a substitute alongside them instead of removing it.',
+    });
+  }
+
+  const { error } = await supabase.from('team_players').delete().eq('id', row.id);
+  if (error) {
+    console.error('manual roster remove failed:', error.message);
+    return res.status(500).json({ error: 'Could not remove that player.' });
+  }
+
+  await audit(req.user, 'team.roster.remove', req.params.id, {
+    player: row.signup?.player_name, signup_id: req.params.signupId,
+  });
+  res.json({ ok: true });
+});
+
 // ── Delete ──────────────────────────────────────────────────────────────────
 organizerRouter.delete('/:id', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
