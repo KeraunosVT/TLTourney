@@ -31,15 +31,40 @@
 //   /lower?type=player&player=Keraunos      pin one player instead of the top
 //   /lower?match=W2-0                       pin the match, rather than following
 //   /lower?pos=top&align=right&scale=1.2    where it sits and how big
-import { useCallback, useEffect, useMemo, useState } from 'react';
+//   /lower?type=onclock,pick                draft night: the clock, and each pick
+import { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
-import { useCountdown, countdownLabel, whenShort } from '../lib/clock';
+import { useCountdown, countdownLabel, mmss, whenShort } from '../lib/clock';
 import { big } from './Match';
 
 // Every card this page knows how to draw. They cycle in the order the URL asks
 // for them, not in this one — a producer who writes type=crowd,matchup meant
 // crowd first.
-const KNOWN = ['matchup', 'crowd', 'series', 'player', 'bans', 'next'];
+const KNOWN = ['onclock', 'pick', 'matchup', 'crowd', 'series', 'player', 'bans', 'next'];
+
+// Which feed each card reads.
+//
+// The card list is fixed when the URL is parsed, so the strip knows before it
+// fetches anything which of the two routes it can actually draw from — and a
+// bracket-only overlay that sits on a scene for four hours has no business
+// polling the draft, or the reverse. /watch polls both unconditionally on
+// purpose, because its scene switcher has to be instant; an overlay has no
+// such switch, so that reasoning does not carry across.
+const SOURCE = {
+  onclock: 'draft',
+  pick: 'draft',
+  matchup: 'bracket',
+  crowd: 'bracket',
+  series: 'bracket',
+  player: 'bracket',
+  bans: 'bracket',
+  next: 'bracket',
+};
+
+// How long a pick stays on screen after it lands. Long enough to read a name
+// and a class out loud, short enough that the strip is empty again before the
+// next one is due.
+const PICK_SHOWS_FOR = 8;
 
 export default function Lower() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -96,31 +121,29 @@ export default function Lower() {
     };
   }, []);
 
-  // ── The one read ──────────────────────────────────────────────────────────
-  // Same public cast route the other scenes use, and no session, for the same
-  // reason: OBS carries no cookie. Five seconds rather than two — the server
-  // caches this for three, and a lower third is not a clock.
-  const [live, setData] = useState(null);
-  const data = demo ? DEMO : live;
+  // ── The reads ─────────────────────────────────────────────────────────────
+  // The same public cast routes the other scenes use, and no session, for the
+  // same reason: OBS carries no cookie.
+  const feeds = useMemo(() => new Set(wanted.map((t) => SOURCE[t])), [wanted]);
 
-  const load = useCallback(async () => {
-    if (demo) return;
-    try {
-      const { data: d } = await axios.get(
-        `/api/stream/bracket${pinnedMatch ? `?match=${encodeURIComponent(pinnedMatch)}` : ''}`,
-      );
-      setData(d);
-    } catch {
-      // Leave the last good frame up. A network blip must not blank an overlay
-      // that is on screen — the previous score is still true.
-    }
-  }, [pinnedMatch, demo]);
+  // Five seconds rather than two — the server caches this for three, and a
+  // bracket is not a clock.
+  const liveBracket = usePoll(
+    `/api/stream/bracket${pinnedMatch ? `?match=${encodeURIComponent(pinnedMatch)}` : ''}`,
+    5000,
+    !demo && feeds.has('bracket'),
+  );
 
-  useEffect(() => {
-    load();
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
-  }, [load]);
+  // Two, because the pick clock IS the point of these cards. At five the
+  // on-clock team would stay wrong for up to five seconds after a pick lands,
+  // which is precisely the moment everybody is looking at it. The digits
+  // themselves tick locally between polls — it is WHOSE name is under them that
+  // needs the faster feed. No ?pool=1: the strip never draws the available
+  // list, and asking for it would add a hundred and fifty names to every poll.
+  const liveDraft = usePoll('/api/stream/draft', 2000, !demo && feeds.has('draft'));
+
+  const data = demo ? DEMO : liveBracket;
+  const draftData = demo ? DEMO_DRAFT : liveDraft;
 
   // ── Rotation, or a stack ──────────────────────────────────────────────────
   // Two ways to ask for more than one card, and they answer different
@@ -152,11 +175,38 @@ export default function Lower() {
   const next = useMemo(() => upNext(data, focus), [data, focus]);
   const player = useMemo(() => spotlight(focus, pinnedPlayer), [focus, pinnedPlayer]);
 
+  // ── Draft night ───────────────────────────────────────────────────────────
+  const draft = draftData?.draft || null;
+  const draftTeams = useMemo(
+    () => new Map((draftData?.teams || []).map((t) => [t.id, t])),
+    [draftData],
+  );
+  const onClockTeam = draftTeams.get(draft?.onClock) || null;
+  const latestPick = (draftData?.picks || [])[0] || null;
+
+  // Demo shows every card it is asked for — that is the whole job of it, and a
+  // pick card that expired eight seconds after the page loaded would leave a
+  // producer positioning a source they cannot see.
+  const age = usePickAge(latestPick, draft?.serverTime);
+  const freshPick = demo ? latestPick : (age !== null && age <= PICK_SHOWS_FOR ? latestPick : null);
+
   // Only the cards that have something to say. A rotation that includes an
   // empty one is a rotation with a blank slot in it, which on a broadcast reads
   // as broken rather than as quiet.
-  const ready = wanted.filter((t) => hasContent(t, { focus, next, player }));
-  const current = ready.length ? ready[step % ready.length] : null;
+  const ready = wanted.filter((t) => hasContent(t, {
+    focus, next, player, draft, onClockTeam, freshPick,
+  }));
+
+  // A pick that has just landed PREEMPTS the rotation instead of waiting its
+  // turn. The card is alive for eight seconds and a twelve-second cycle would
+  // spend most of them showing something else — announcing a thing that just
+  // happened is the one job on this page with a reason to interrupt.
+  //
+  // `ready` already excludes a stale pick, so its presence here means fresh.
+  const cycle = ready.filter((t) => t !== 'pick');
+  const current = ready.includes('pick')
+    ? 'pick'
+    : (cycle.length ? cycle[step % cycle.length] : null);
 
   const a = teams.get(focus?.team_a_id) || focus?.team_a || null;
   const b = teams.get(focus?.team_b_id) || focus?.team_b || null;
@@ -170,6 +220,8 @@ export default function Lower() {
 
   const card = (type) => {
     switch (type) {
+      case 'onclock': return <OnClock draft={draft} team={onClockTeam} />;
+      case 'pick': return <LatestPick pick={freshPick} team={draftTeams.get(freshPick?.team_id)} />;
       case 'matchup': return <Matchup focus={focus} a={a} b={b} />;
       case 'crowd': return <Crowd focus={focus} a={a} b={b} />;
       case 'series': return <Series focus={focus} teams={teams} />;
@@ -245,6 +297,75 @@ function Legend({ wanted, ready, showing }) {
   );
 }
 
+/**
+ * One feed, polled — or not polled at all.
+ *
+ * `enabled` is the whole reason this is a hook rather than two copies of an
+ * effect: whether a route is worth asking for is decided by the URL, and a
+ * disabled poller must hold no timer rather than fetch and discard.
+ *
+ * A failed request leaves the last good frame up, for both feeds and for the
+ * same reason: a network blip must not blank an overlay that is on air. The
+ * previous score is still true, and so is the previous team name.
+ */
+function usePoll(url, every, enabled) {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let alive = true;
+
+    const load = async () => {
+      try {
+        const { data: d } = await axios.get(url);
+        if (alive) setData(d);
+      } catch {
+        // Held deliberately. See above.
+      }
+    };
+
+    load();
+    const id = setInterval(load, every);
+    return () => { alive = false; clearInterval(id); };
+  }, [url, every, enabled]);
+
+  return data;
+}
+
+/**
+ * How many seconds ago the newest pick landed — ticking.
+ *
+ * Measured against the SERVER's clock (created_at vs serverTime), not against
+ * when this browser first saw the row, and that difference is the entire
+ * behaviour. A source brought up in the middle of a draft would otherwise flash
+ * the last pick as though it had just happened, every time OBS reloaded the
+ * page — which on a four-hour broadcast is several times.
+ *
+ * The same skew correction the pick clock uses, for the same reason: a machine
+ * whose clock is a minute fast would hide every pick card instantly and look
+ * entirely plausible doing it.
+ */
+function usePickAge(pick, serverTime) {
+  const skew = useRef(0);
+  const [, tick] = useState(0);
+
+  useEffect(() => {
+    if (serverTime) skew.current = Date.now() - new Date(serverTime).getTime();
+  }, [serverTime]);
+
+  // 2Hz. This only decides the moment one card stops being drawn, so it does
+  // not need the countdown's 4Hz.
+  const at = pick?.created_at;
+  useEffect(() => {
+    if (!at) return undefined;
+    const id = setInterval(() => tick((n) => n + 1), 500);
+    return () => clearInterval(id);
+  }, [at]);
+
+  if (!at) return null;
+  return ((Date.now() - skew.current) - new Date(at).getTime()) / 1000;
+}
+
 // ── Invented data, for positioning the source ───────────────────────────────
 // Shaped exactly like the cast route's answer, so every card takes the same
 // path it takes on the night. Names are obviously not real ones.
@@ -286,9 +407,53 @@ const DEMO = {
   },
 };
 
+// Shaped like the draft cast route's answer, same as DEMO above.
+//
+// The demo clock is a real countdown and it really does run out — leave the
+// demo up for two minutes and it sits at 0:00 with an empty bar. That is
+// deliberate rather than a gap: it is exactly what the card shows on the night
+// when a clock expires before the auto-pick lands, so a producer sizing the
+// source sees the widest state it can reach, not only the prettiest one.
+const DEMO_DRAFT = {
+  draft: {
+    status: 'live',
+    pickSeconds: 120,
+    currentPick: 47,
+    totalPicks: 232,
+    rounds: 58,
+    round: 12,
+    pickInRound: 3,
+    deadline: new Date(Date.now() + 74 * 1000).toISOString(),
+    serverTime: new Date().toISOString(),
+    onClock: A_ID,
+  },
+  teams: [
+    { id: A_ID, name: 'Sample Team One', tag: 'ONE', seed: 1,
+      captains: [{ player_name: 'Sample Captain', label: 'Captain' },
+        { player_name: 'Sample Co-captain', label: 'Co-captain' }] },
+    { id: B_ID, name: 'Sample Team Two', tag: 'TWO', seed: 4, captains: [] },
+  ],
+  picks: [
+    {
+      pick_number: 46, round: 12, team_id: B_ID, auto: false,
+      created_at: new Date().toISOString(),
+      player: {
+        id: 'demo-p', player_name: 'Sample Player', role: 'Healer',
+        classes: ['Wand / Longbow'], positions: [], wants_shotcall: true,
+      },
+    },
+  ],
+};
+
 // ── What each card needs before it is worth showing ─────────────────────────
-function hasContent(type, { focus, next, player }) {
+function hasContent(type, { focus, next, player, draft, onClockTeam, freshPick }) {
   switch (type) {
+    // Live or paused only. A draft that has not started has no clock to show,
+    // and one that has finished has nothing left to count down — both are
+    // states where an overlay should be showing nothing rather than a zero.
+    case 'onclock':
+      return !!(onClockTeam && (draft?.status === 'live' || draft?.status === 'paused'));
+    case 'pick': return !!freshPick;
     case 'matchup': return !!(focus?.team_a_id && focus?.team_b_id);
     case 'crowd': return (focus?.crowd?.total || 0) > 0;
     case 'series': return (focus?.games || []).some((g) => g.map || g.winner_team_id);
@@ -361,6 +526,103 @@ function Strip({ children, demo, delay = 0 }) {
 const Eyebrow = ({ children }) => (
   <span className="text-[0.5em] uppercase tracking-[0.24em] text-ash whitespace-nowrap">{children}</span>
 );
+
+// ── Whose pick it is ────────────────────────────────────────────────────────
+// The card this page exists for on draft night. /watch shows all of this
+// already — the value here is that it survives cutting AWAY from that scene, to
+// a captain's camera or a caster segment, which on a fifty-eight-round draft is
+// most of the broadcast.
+//
+// The countdown is computed here rather than passed in, so the digits keep
+// ticking between the two-second polls instead of stepping.
+function OnClock({ draft, team }) {
+  const left = useCountdown(draft.deadline, draft.serverTime);
+  const paused = draft.status === 'paused';
+  const urgent = !paused && left !== null && left <= 30;
+  const fraction = draft.pickSeconds
+    ? Math.max(0, Math.min(1, (left ?? 0) / draft.pickSeconds))
+    : 0;
+
+  return (
+    <div className="flex flex-col gap-[0.3em] min-w-[20em] max-w-[80vw]">
+      <div className="flex items-baseline justify-between gap-[1em]">
+        <Eyebrow>{paused ? 'Paused' : 'On the clock'}</Eyebrow>
+        <span className="mono text-[0.5em] text-ash tabular-nums whitespace-nowrap">
+          R{draft.round}/{draft.rounds} · P{draft.currentPick}/{draft.totalPicks}
+        </span>
+      </div>
+
+      <div className="flex items-baseline justify-between gap-[1.2em] min-w-0">
+        <span className="flex flex-col gap-[0.1em] min-w-0">
+          <span className="text-[1.15em] truncate">{team.name}</span>
+          <span className="text-[0.55em] text-ash truncate">
+            {(team.captains || []).map((c) => c.player_name).join(' · ') || 'no captain'}
+          </span>
+        </span>
+
+        {/* A paused draft has no deadline, so there is no time to show and a
+            frozen number would read as a clock that has stopped working. */}
+        <span
+          className={`mono text-[1.5em] leading-none tabular-nums shrink-0 ${
+            paused ? 'text-ash' : urgent ? 'text-crimsonbright' : ''
+          }`}
+        >
+          {paused ? '—:—' : mmss(left)}
+        </span>
+      </div>
+
+      {/* Reads from across a room without reading the digits, and says "nearly
+          out of time" a beat before the number does. */}
+      <div className="h-[0.16em] rounded-full bg-panelup overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-[width] duration-300 ease-linear ${
+            urgent ? 'bg-crimsonbright' : 'bg-crimson'
+          }`}
+          style={{ width: `${paused ? 0 : fraction * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── The pick that just landed ───────────────────────────────────────────────
+// Only ever on screen for a few seconds — see PICK_SHOWS_FOR and usePickAge.
+// The team is the TAG where there is one: this card is read in a hurry and the
+// name is already the widest thing on it.
+function LatestPick({ pick, team }) {
+  return (
+    <>
+      <div className="flex flex-col gap-[0.15em] min-w-0">
+        <Eyebrow>
+          Pick {pick.pick_number} · round {pick.round}
+          {/* A caster WILL be asked about this one. */}
+          {pick.auto && <span className="text-oxblood"> · auto</span>}
+        </Eyebrow>
+        <span className="text-[1.15em] truncate">{pick.player.player_name}</span>
+      </div>
+
+      <div className="flex items-baseline gap-[0.7em] min-w-0">
+        {pick.player.role && (
+          <span className="text-[0.6em] uppercase tracking-[0.14em] text-crimson whitespace-nowrap">
+            {pick.player.role}
+          </span>
+        )}
+        <span className="text-[0.7em] text-ash truncate">
+          {(pick.player.classes || []).join(' · ')}
+        </span>
+        {pick.player.wants_shotcall && (
+          <span className="text-[0.5em] uppercase tracking-[0.14em] text-verdigris whitespace-nowrap">
+            shotcaller
+          </span>
+        )}
+      </div>
+
+      <span className="text-[0.95em] whitespace-nowrap shrink-0">
+        <span className="text-dim">→ </span>{team?.tag || team?.name || '—'}
+      </span>
+    </>
+  );
+}
 
 // ── Who is playing ──────────────────────────────────────────────────────────
 function Matchup({ focus, a, b }) {
