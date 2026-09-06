@@ -34,7 +34,7 @@ const { slotFor, teamOnClock, totalPicks, upcoming, nextPickFor, worstCaseSecond
 const { autoPick } = require('../shared/autopick.cjs');
 const { tierMeta } = require('../shared/board.cjs');
 const { rosterProgress } = require('../shared/roster.cjs');
-const { roleDemand } = require('../shared/parties.cjs');
+const { roleDemand, rosterDemand } = require('../shared/parties.cjs');
 const { ROLES } = require('../shared/roles.cjs');
 
 // How late a deadline may be before the draft stops itself instead of picking.
@@ -690,7 +690,8 @@ async function assembleState(t, d) {
   // Against the per-team minimum, not the maximum: the floor is the number
   // below which a roster genuinely cannot be fielded, and the flexible slots
   // have no single answer. See shared/parties.cjs.
-  const perTeam = roleDemand(Array.isArray(t.party_template) ? t.party_template : [], 1);
+  const template = Array.isArray(t.party_template) ? t.party_template : [];
+  const perTeam = roleDemand(template, 1);
   const needs = {};
   ROLES.forEach((role) => {
     needs[role] = teams.reduce((sum, x) => {
@@ -728,6 +729,22 @@ async function assembleState(t, d) {
     },
     teams,
     needs,
+    // What ONE team's WHOLE roster asks of each role — starters and bench.
+    // `needs` above is the starting side only, summed across every team and
+    // netted off what they hold; that is the organizer's question. This is the
+    // captain's: "how many tanks does my 66 want", and it has to include the
+    // bench because picks 49 through 66 are the bench.
+    //
+    // A range, not a number, for the reason roleDemand exists: two of the five
+    // slot types take more than one role, so the honest answer to "how many
+    // healers do I need" is a floor and a ceiling. Publishing a single figure
+    // here would have captains drafting to a requirement that isn't real.
+    demand: (() => {
+      const whole = rosterDemand(template, t.sub_slots, 1);
+      return ROLES.map((role) => ({
+        role, min: whole[role]?.min ?? 0, max: whole[role]?.max ?? 0,
+      }));
+    })(),
     picks: (picksRes.data || []).filter((p) => p.player).map(feedPlayer),
   };
 }

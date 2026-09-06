@@ -40,29 +40,33 @@ test('six teams need 360 roster spots, 288 of them starting', () => {
 test('role demand is a RANGE, because two slot types take more than one role', () => {
   // The bug this guards: collapsing the flexible slots into one number. Every
   // Tank / DPS and Any Role slot counted as a tank requirement overstates
-  // tanks by 48; counting none of them understates the ceiling by the same.
+  // tanks by 42; counting none of them understates the ceiling by the same.
+  //
+  // Figures are the template of migration 020 — 7 flexible slots a team, not
+  // the 8 the original had, because party 2 stopped being a second objective
+  // party.
   const d = roleDemand(DEFAULT_PARTY_TEMPLATE, 6);
-  assert.deepStrictEqual(d.Tank, { min: 60, max: 108 });
-  assert.deepStrictEqual(d.DPS, { min: 84, max: 132 });
-  assert.deepStrictEqual(d.Healer, { min: 96, max: 120 });
+  assert.deepStrictEqual(d.Tank, { min: 54, max: 96 });
+  assert.deepStrictEqual(d.DPS, { min: 96, max: 138 });
+  assert.deepStrictEqual(d.Healer, { min: 96, max: 126 });
 });
 
 test('compulsory + flexible slots reconcile to the starter count', () => {
   const d = roleDemand(DEFAULT_PARTY_TEMPLATE, 6);
   const compulsory = d.Tank.min + d.DPS.min + d.Healer.min;
-  assert.strictEqual(compulsory, 240);
-  assert.strictEqual(compulsory + 48, 288, 'the 48 flexible slots are the balance');
+  assert.strictEqual(compulsory, 246);
+  assert.strictEqual(compulsory + 42, 288, 'the 42 flexible slots are the balance');
 });
 
 test('shortfall per role is measured against the FLOOR, not the ceiling', () => {
   // Against the ceiling, a pool could look short of tanks while being able to
   // field every team — and an organizer would chase tanks it does not need.
-  const r = readiness(tournament, 6, pool({ Tank: 60, DPS: 84, Healer: 96 }));
+  const r = readiness(tournament, 6, pool({ Tank: 54, DPS: 96, Healer: 96 }));
   r.roles.forEach((x) => assert.strictEqual(x.short, 0, `${x.role} should not be short`));
 });
 
 test('one short of the floor is reported as short by one', () => {
-  const r = readiness(tournament, 6, pool({ Tank: 59, DPS: 84, Healer: 96 }));
+  const r = readiness(tournament, 6, pool({ Tank: 53, DPS: 96, Healer: 96 }));
   assert.strictEqual(r.roles.find((x) => x.role === 'Tank').short, 1);
   assert.strictEqual(r.roles.find((x) => x.role === 'DPS').short, 0);
 });

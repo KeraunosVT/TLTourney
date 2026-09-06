@@ -5,7 +5,9 @@
 const express = require('express');
 const { supabase, currentTournament, invalidateTournament, audit } = require('./db');
 const { sendDM, listRoles, fetchMember, botConfigured } = require('./discord');
-const { resizeTemplate, templateFits, SLOT_NAMES } = require('../shared/parties.cjs');
+const {
+  resizeTemplate, templateFits, resizeSubs, subsFit, SLOT_NAMES,
+} = require('../shared/parties.cjs');
 
 const router = express.Router();
 
@@ -253,6 +255,23 @@ router.put('/tournament', async (req, res) => {
     }));
   }
 
+  // An explicit bench, if one was sent. Same validation as a party's slots and
+  // for the same reason — 'Support' is the one people reach for, and it names a
+  // role no signup can hold.
+  if (req.body?.sub_slots !== undefined) {
+    const slots = req.body.sub_slots;
+    if (!Array.isArray(slots)) {
+      return res.status(400).json({ error: 'The bench is a list of slot types.' });
+    }
+    const bad = slots.find((x) => !SLOT_NAMES.includes(x));
+    if (bad) return res.status(400).json({ error: `"${bad}" is not a slot type.` });
+    patch.sub_slots = slots;
+    // The bench IS the substitute count. Sending slots without a number means
+    // the number follows, rather than the write being refused by the CHECK for
+    // a disagreement the caller never expressed an opinion about.
+    if (req.body?.sub_count === undefined) patch.sub_count = slots.length;
+  }
+
   // THE TEMPLATE AND THE NUMBERS MOVE TOGETHER, always.
   //
   // roster_size is generated from party_count * party_size + sub_count, and
@@ -266,6 +285,16 @@ router.put('/tournament', async (req, res) => {
   const base = patch.party_template ?? t.party_template;
   if (!templateFits(base, nextCount, nextSize)) {
     patch.party_template = resizeTemplate(base, nextCount, nextSize);
+  }
+
+  // And so do the bench and ITS number — but this half IS pinned by a CHECK
+  // (migration 021), so a mismatch here is not a quiet disagreement, it is a
+  // rejected write. Resizing rather than refusing keeps the Setup page's subs
+  // field working the way it always has: type 14, get a 14-slot bench.
+  const nextSubs = patch.sub_count ?? t.sub_count;
+  const bench = patch.sub_slots ?? t.sub_slots;
+  if (!subsFit(bench, nextSubs)) {
+    patch.sub_slots = resizeSubs(bench, nextSubs);
   }
 
   if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nothing to change.' });

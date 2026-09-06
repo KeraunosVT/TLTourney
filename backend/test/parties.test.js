@@ -11,8 +11,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  DEFAULT_PARTY_TEMPLATE, SLOT_NAMES, resizeTemplate, templateFits,
-  startersPerTeam, roleDemand,
+  DEFAULT_PARTY_TEMPLATE, DEFAULT_SUB_SLOTS, SLOT_NAMES, resizeTemplate, templateFits,
+  startersPerTeam, roleDemand, rosterDemand, resizeSubs, subsFit,
 } = require('../../shared/parties.cjs');
 
 test('the default template is 8 parties of 6', () => {
@@ -86,4 +86,89 @@ test('resizing is idempotent', () => {
   const once = resizeTemplate(DEFAULT_PARTY_TEMPLATE, 5, 4);
   const twice = resizeTemplate(once, 5, 4);
   assert.deepStrictEqual(twice, once);
+});
+
+// ── The bench ───────────────────────────────────────────────────────────────
+// Substitutes carry slot types now (migration 021). The bug this section
+// guards is the one that existed for as long as they did not: role figures
+// counted off 48 starters while the roster total counted 66, so a pool could
+// report every role covered and be twenty players short of a bench.
+
+test('the default bench is 18 slots — 4 tank, 10 dps, 4 healer', () => {
+  assert.strictEqual(DEFAULT_SUB_SLOTS.length, 18);
+  const count = (r) => DEFAULT_SUB_SLOTS.filter((s) => s === r).length;
+  assert.strictEqual(count('Tank'), 4);
+  assert.strictEqual(count('DPS'), 10);
+  assert.strictEqual(count('Healer'), 4);
+});
+
+test('ROSTER demand is starters PLUS bench', () => {
+  const starters = roleDemand(DEFAULT_PARTY_TEMPLATE, 1);
+  const whole = rosterDemand(DEFAULT_PARTY_TEMPLATE, DEFAULT_SUB_SLOTS, 1);
+
+  assert.deepStrictEqual(whole.Tank, { min: 13, max: 20 });
+  assert.deepStrictEqual(whole.DPS, { min: 26, max: 33 });
+  assert.deepStrictEqual(whole.Healer, { min: 20, max: 25 });
+
+  // Every floor moved by exactly the bench's count of that role, and nothing
+  // else did. Stated as a relation rather than three more constants so it
+  // survives the next time the template is retuned.
+  assert.strictEqual(whole.Tank.min - starters.Tank.min, 4);
+  assert.strictEqual(whole.DPS.min - starters.DPS.min, 10);
+  assert.strictEqual(whole.Healer.min - starters.Healer.min, 4);
+});
+
+test('the floors and the flexible slots reconcile to the whole roster', () => {
+  const whole = rosterDemand(DEFAULT_PARTY_TEMPLATE, DEFAULT_SUB_SLOTS, 1);
+  const compulsory = whole.Tank.min + whole.DPS.min + whole.Healer.min;
+  // 59 compulsory + the 7 flexible starting slots = the 66-man roster.
+  assert.strictEqual(compulsory, 59);
+  assert.strictEqual(compulsory + 7, 66);
+});
+
+test('a bench of Any Role adds no requirement to anybody', () => {
+  // The state migration 021 leaves an archived season in, and what resizeSubs
+  // pads with. It must not make a roster read as short of a role.
+  const starters = roleDemand(DEFAULT_PARTY_TEMPLATE, 1);
+  const whole = rosterDemand(DEFAULT_PARTY_TEMPLATE, Array(18).fill('Any Role'), 1);
+  ['Tank', 'DPS', 'Healer'].forEach((r) => {
+    assert.strictEqual(whole[r].min, starters[r].min, `${r} floor moved`);
+    assert.strictEqual(whole[r].max, starters[r].max + 18, `${r} ceiling`);
+  });
+});
+
+test('rosterDemand survives a tournament that has no bench recorded', () => {
+  // Rows read before 021 is applied. Falls back to the starting side rather
+  // than throwing on a page that would otherwise render.
+  const starters = roleDemand(DEFAULT_PARTY_TEMPLATE, 1);
+  [undefined, null, []].forEach((bench) => {
+    assert.deepStrictEqual(rosterDemand(DEFAULT_PARTY_TEMPLATE, bench, 1), starters);
+  });
+});
+
+test('RESIZING THE BENCH KEEPS IT AGREEING WITH THE COUNT', () => {
+  // The property the CHECK in 021 enforces, and the reason the API resizes
+  // instead of refusing: an organizer typing a new number in Setup must not
+  // get a rejected write.
+  for (const n of [0, 1, 12, 18, 40]) {
+    const b = resizeSubs(DEFAULT_SUB_SLOTS, n);
+    assert.ok(subsFit(b, n), `${n} does not fit`);
+    assert.ok(b.every((s) => SLOT_NAMES.includes(s)), `${n} produced an unknown slot`);
+  }
+});
+
+test('the bench trims from the END and pads with Any Role', () => {
+  assert.deepStrictEqual(resizeSubs(['Tank', 'DPS', 'Healer'], 2), ['Tank', 'DPS']);
+  assert.deepStrictEqual(
+    resizeSubs(['Tank'], 3),
+    ['Tank', 'Any Role', 'Any Role'],
+  );
+  assert.deepStrictEqual(resizeSubs(null, 2), ['Any Role', 'Any Role']);
+});
+
+test('subsFit catches each way the bench and the count can disagree', () => {
+  assert.ok(subsFit(DEFAULT_SUB_SLOTS, 18));
+  assert.ok(!subsFit(DEFAULT_SUB_SLOTS, 12), 'too many slots');
+  assert.ok(!subsFit(['Tank'], 4), 'too few');
+  assert.ok(!subsFit(null, 0), 'a missing bench is not a bench of nothing');
 });

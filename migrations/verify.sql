@@ -530,4 +530,36 @@ union all
 select '017 · no answer was saved after its question closed',
        not exists (select 1 from question_answers a
                    join prediction_questions q on q.id = a.question_id
-                   where q.closes_at is not null and a.updated_at > q.closes_at);
+                   where q.closes_at is not null and a.updated_at > q.closes_at)
+union all
+-- ── 019 ────────────────────────────────────────────────────────────────────
+select '019 · drafts.is_mock exists and defaults to false',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'drafts'
+                 and column_name = 'is_mock' and column_default = 'false')
+union all
+-- ── 020 ────────────────────────────────────────────────────────────────────
+-- Party 2 stopped being a second objective party. Asserted by its SHAPE rather
+-- than its name: 'Flex' is a name three other parties already carry, while
+-- "no second party demanding two compulsory tanks" is the thing that changed.
+select '020 · party 2 is an ordinary Flex',
+       (select party_template->1->'slots' = '["Tank","Any Role","DPS","DPS","Healer","Healer"]'::jsonb
+          from tournaments where status <> 'complete' order by created_at limit 1)
+union all
+-- ── 021 ────────────────────────────────────────────────────────────────────
+select '021 · sub_slots is pinned to sub_count by a constraint',
+       exists (select 1 from pg_constraint where conname = 'tournaments_sub_slots_count')
+union all
+-- The constraint above guarantees the LENGTH. This is the composition, which
+-- nothing enforces and which is the number captains actually draft against.
+select '021 · the running bench is 4 tank, 10 dps, 4 healer',
+       (select (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'Tank') = 4
+           and (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'DPS') = 10
+           and (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'Healer') = 4
+          from tournaments where status <> 'complete' order by created_at limit 1)
+union all
+-- Same trap as the party template, and worth asserting separately because the
+-- bench is edited through a different field: a bench slot naming a role no
+-- signup can hold is a seat that stays empty forever.
+select '021 · the bench says Healer, not Support',
+       (select sub_slots::text not like '%Support%' from tournaments order by created_at limit 1);

@@ -4,7 +4,7 @@
 // requireOrganizer for everything that changes them.
 const express = require('express');
 const { supabase, currentTournament, audit } = require('./db');
-const { roleDemand, startersPerTeam } = require('../shared/parties.cjs');
+const { rosterDemand, startersPerTeam } = require('../shared/parties.cjs');
 const { ROLES } = require('../shared/roles.cjs');
 const { MAX_CAPTAINS_PER_TEAM, isSeat, seatLabel, firstFreeSeat } = require('../shared/captains.cjs');
 const { VIA_CAPTAIN, rosterProgress } = require('../shared/roster.cjs');
@@ -333,7 +333,13 @@ organizerRouter.get('/', async (req, res) => {
  */
 function readiness(t, teamCount, approved) {
   const template = Array.isArray(t.party_template) ? t.party_template : [];
-  const demand = roleDemand(template, teamCount);
+  // The WHOLE roster, bench included (migration 021). This counted the 48
+  // starters only while `needed` below counted all 66, so the panel could
+  // report every role covered and a shortfall of 200 in the same breath — the
+  // roles were answering "can these teams field a starting eight" and the
+  // headline was answering "can these teams be filled". Both are worth asking;
+  // showing them side by side as though they were one question was not.
+  const demand = rosterDemand(template, t.sub_slots, teamCount);
 
   const have = {};
   ROLES.forEach((r) => { have[r] = 0; });

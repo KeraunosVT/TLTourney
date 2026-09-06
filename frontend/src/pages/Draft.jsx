@@ -176,6 +176,7 @@ export default function Draft() {
 
         <div className="flex flex-col gap-4">
           <OnDeck draft={d} teams={teamsById} you={you} />
+          <RoleNeeds team={teamsById[you?.teamId]} demand={state.demand} />
           <Feed picks={state.picks} teams={teamsById} />
           <Standings teams={state.teams} you={you} />
         </div>
@@ -514,6 +515,80 @@ function OnDeck({ draft, teams, you }) {
             <span className="truncate">{teams[x.teamId]?.name || '—'}</span>
           </div>
         ))}
+      </div>
+    </Panel>
+  );
+}
+
+// ── What your roster is made of ─────────────────────────────────────────────
+// Asked for by captains after the first mock: they could see how many players
+// they had, and not what those players WERE, so the only way to answer "do we
+// still need healers" mid-draft was to count the roster by hand between picks.
+//
+// Counted against the FLOOR — the slots only that role can fill — with the
+// ceiling shown beside it. That is the same reading the organizer's readiness
+// panel gives, and deliberately so: two screens describing one template must
+// not disagree about what it asks for. Chasing the ceiling would mean drafting
+// for slots the flexible ones already cover.
+//
+// The bar fills and STOPS at the floor rather than continuing. Past it a role
+// is covered and the extra are bench depth, which is a different thing from
+// progress toward fielding eight parties, and a bar that kept growing would
+// make "we have plenty" look identical to "we are nearly there".
+//
+// Captains count toward this. They are on the roster and they play, so a team
+// whose captain is a healer genuinely needs one fewer.
+function RoleNeeds({ team, demand }) {
+  // Only a captain has a team here, and only a captain has picks to plan. For
+  // everybody else the panel is absent rather than empty — an organizer
+  // watching does not have a roster to be short of anything.
+  if (!team || !demand?.length) return null;
+
+  const p = team.progress;
+  const have = (role) => (p?.byRole || []).find((r) => r.role === role)?.have || 0;
+
+  return (
+    <Panel
+      title="Your roster by role"
+      right={
+        <span className="mono text-xs text-ash">
+          {p?.filled ?? 0}<span className="text-dim">/{p?.size ?? '—'}</span>
+        </span>
+      }
+    >
+      <div className="p-4 flex flex-col gap-2.5">
+        {demand.map(({ role, min, max }) => {
+          const n = have(role);
+          const short = Math.max(0, min - n);
+          const pct = min === 0 ? 100 : Math.min(100, (n / min) * 100);
+          return (
+            <div key={role} className="flex items-center gap-2.5 text-[13px]">
+              <span className="w-[52px] flex-none text-ash">{role}</span>
+              <span className="flex-1 h-[9px] rounded bg-panelup overflow-hidden">
+                <i
+                  className={`block h-full ${short > 0 ? 'bg-oxblood' : 'bg-verdigris/80'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </span>
+              <span className="mono text-[12px] w-[58px] text-right">
+                {n}<span className="text-ash">/{min}</span>
+              </span>
+              <span
+                className="mono text-[10.5px] text-ash w-[48px] text-right"
+                title="ceiling, if every flexible slot went to this role"
+              >
+                max {max}
+              </span>
+            </div>
+          );
+        })}
+
+        {p?.unanswered > 0 && (
+          <p className="text-[11px] text-ash leading-relaxed mt-0.5">
+            {p.unanswered} on your roster {p.unanswered === 1 ? 'has' : 'have'} no role recorded
+            and {p.unanswered === 1 ? 'is' : 'are'} not counted above.
+          </p>
+        )}
       </div>
     </Panel>
   );
