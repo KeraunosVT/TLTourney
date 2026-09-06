@@ -562,4 +562,38 @@ union all
 -- bench is edited through a different field: a bench slot naming a role no
 -- signup can hold is a seat that stays empty forever.
 select '021 · the bench says Healer, not Support',
-       (select sub_slots::text not like '%Support%' from tournaments order by created_at limit 1);
+       (select sub_slots::text not like '%Support%' from tournaments order by created_at limit 1)
+union all
+-- ── 022 ────────────────────────────────────────────────────────────────────
+select '022 · team_party_slots table',
+       to_regclass('public.team_party_slots') is not null
+union all
+select '022 · one player sits in one seat',
+       exists (select 1 from pg_constraint where conname = 'party_slots_one_seat_per_player')
+union all
+select '022 · one seat holds one player',
+       exists (select 1 from pg_constraint where conname = 'party_slots_one_player_per_seat')
+union all
+-- THE constraint, and the reason this is a table rather than a jsonb layout on
+-- the team. Without it a comp can name somebody who was cut an hour ago.
+select '022 · a seated player is on the roster (FK, cascading)',
+       exists (select 1 from pg_constraint where conname = 'party_slots_on_the_roster')
+union all
+-- What that FK guarantees, proven rather than assumed. Should be zero always.
+select '022 · nobody is seated who is not on the roster',
+       not exists (select 1 from team_party_slots s
+                   where not exists (select 1 from team_players r
+                                      where r.team_id = s.team_id
+                                        and r.signup_id = s.signup_id))
+union all
+-- A seating pointing at a seat the template does not have renders nowhere and
+-- is invisible in the UI — the one corruption the constraints cannot catch,
+-- because party_template can be resized after a comp is built.
+select '022 · every seating points at a seat the template still has',
+       not exists (
+         select 1 from team_party_slots s
+           join teams t on t.id = s.team_id
+           join tournaments o on o.id = t.tournament_id
+          where s.party_index >= jsonb_array_length(o.party_template)
+             or s.slot_index >= jsonb_array_length(
+                  o.party_template->s.party_index->'slots'));

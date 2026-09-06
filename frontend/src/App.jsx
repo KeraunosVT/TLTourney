@@ -11,6 +11,8 @@ import Setup from './pages/Setup';
 import Teams from './pages/Teams';
 import Board from './pages/Board';
 import Draft from './pages/Draft';
+import Parties from './pages/Parties';
+import Comp from './pages/Comp';
 import Bracket from './pages/Bracket';
 import Match from './pages/Match';
 import Leaderboard from './pages/Leaderboard';
@@ -65,6 +67,11 @@ function Shell() {
               server refuses it either way — this just keeps a dead link off
               everyone else's rail. */}
           {captainOf && <NavLink to="/board" className={link}>Draft board</NavLink>}
+          {/* Same reasoning as the board: only a captain can arrange a comp, so
+              only a captain is offered the builder. /comp is for everybody and
+              is linked from the page itself rather than the rail — it is a
+              thing you go to in order to screenshot, not to browse. */}
+          {captainOf && <NavLink to="/parties" className={link}>Parties</NavLink>}
           {user?.isOrganizer && <NavLink to="/queue" className={link}>Approval queue</NavLink>}
           {user?.isOrganizer && <NavLink to="/teams" className={link}>Teams</NavLink>}
           {user?.isOrganizer && <NavLink to="/setup" className={link}>Setup</NavLink>}
@@ -162,6 +169,11 @@ export default function App() {
               <Route path="/leaderboard" element={<Leaderboard />} />
               <Route path="/player/:signupId" element={<Player />} />
               <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />
+              {/* The builder gates itself rather than sitting behind
+                  CaptainOnly: a non-captain who follows the link gets the
+                  comps and a sentence, which is more use than a bounce. */}
+              <Route path="/parties" element={<Parties />} />
+              <Route path="/comp" element={<Comp />} />
               <Route path="/queue" element={<OrganizerOnly><Queue /></OrganizerOnly>} />
               <Route path="/teams" element={<OrganizerOnly><Teams /></OrganizerOnly>} />
               <Route path="/setup" element={<OrganizerOnly><Setup /></OrganizerOnly>} />

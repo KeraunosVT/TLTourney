@@ -21,6 +21,7 @@ const draft = require('./draft');
 const bracket = require('./bracket');
 const results = require('./results');
 const predictions = require('./predictions');
+const parties = require('./parties');
 const { currentTournament, supabase } = require('./db');
 
 const app = express();
@@ -147,6 +148,12 @@ app.use('/api/board', (req, res, next) => (req.method === 'GET' ? next() : board
 // exempt for the same reason the board's is. The pick itself is a write, but a
 // write nobody makes twice a minute — it shares the board's allowance.
 app.use('/api/draft', (req, res, next) => (req.method === 'GET' ? next() : boardLimiter(req, res, next)), draft.router);
+
+// The party builder writes one seat per drag, so a captain arranging a comp
+// produces a burst of small writes rather than the occasional one the general
+// write limit is shaped for. It shares the board's allowance, which exists for
+// exactly that pattern.
+app.use('/api/parties', (req, res, next) => (req.method === 'GET' ? next() : boardLimiter(req, res, next)), parties.router);
 
 app.use('/api/bracket', bracket.router);
 app.use('/api/stats', results.router);
