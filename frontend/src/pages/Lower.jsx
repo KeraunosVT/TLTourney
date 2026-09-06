@@ -248,9 +248,8 @@ export default function Lower() {
         // arriving together read as one block landing, which is heavier than
         // it needs to be over live footage. Sixty milliseconds apart and they
         // arrive as a sequence instead.
-        // The demo badge goes on the first strip only. One is enough to stop
-        // invented data reaching air; three is a stack wearing a uniform.
-        <Strip key={type} demo={demo && i === 0} delay={stack ? i * 60 : 0}>
+        // See stripFlag for which badge lands where.
+        <Strip key={type} flag={stripFlag(type, i, demo, draft)} delay={stack ? i * 60 : 0}>
           {card(type)}
         </Strip>
       ))}
@@ -499,7 +498,23 @@ function spotlight(focus, pinned) {
 // has to hold up against a bright sky and a spell effect equally. The crimson
 // edge is the brand's one saturated element and does the work of saying whose
 // broadcast this is without a logo taking up room.
-function Strip({ children, demo, delay = 0 }) {
+/**
+ * Which "this is not the real thing" badge a strip carries, if any.
+ *
+ * DEMO goes on the first strip only — one is enough to stop invented data
+ * reaching air, and three is a stack wearing a uniform. It also wins outright:
+ * in demo mode there is no real draft to be a rehearsal of.
+ *
+ * MOCK is per CARD instead, because it means something narrower — "the draft
+ * feeding this card is a rehearsal". A bracket card stacked underneath one is
+ * showing a real bracket and must not be captioned as practice.
+ */
+const stripFlag = (type, i, demo, draft) => {
+  if (demo) return i === 0 ? 'demo' : null;
+  return draft?.isMock && SOURCE[type] === 'draft' ? 'mock' : null;
+};
+
+function Strip({ children, flag, delay = 0 }) {
   return (
     <div
       className="lower-in flex items-stretch max-w-[92vw] rounded-[0.3em] overflow-hidden
@@ -512,10 +527,10 @@ function Strip({ children, demo, delay = 0 }) {
       <div className="bg-ink/85 backdrop-blur-[2px] border-y border-r border-line/70
                       px-[1.1em] py-[0.7em] flex items-center gap-[1.2em] min-w-0">
         {children}
-        {demo && (
+        {flag && (
           <span className="text-[0.45em] uppercase tracking-[0.24em] text-crimsonbright
                            border border-crimson/60 rounded px-[0.6em] py-[0.3em] shrink-0">
-            demo
+            {flag}
           </span>
         )}
       </div>

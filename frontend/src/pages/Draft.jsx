@@ -115,6 +115,7 @@ export default function Draft() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {d.isMock && <Pill tone="bad">mock</Pill>}
           <StatusPill status={d.status} />
           {/* Opened in its own tab because this is the one you point OBS at,
               and it has no navigation to get back from. */}
@@ -128,6 +129,22 @@ export default function Draft() {
           </a>
         </div>
       </header>
+
+      {/* Above the clock banner and above any transient note, because this is
+          the one thing on the page that changes what a pick MEANS. A captain
+          who reads nothing else still has to see it. */}
+      {d.isMock && (
+        <div className="mb-3 px-4 py-3 rounded border border-oxblood/70 bg-oxblooddeep
+                        flex items-baseline gap-3 flex-wrap" role="status">
+          <span className="text-[11px] uppercase tracking-[0.18em] text-crimsonbright font-semibold">
+            Mock draft
+          </span>
+          <span className="text-[13px] text-bone">
+            This is a rehearsal, not the real draft. Nothing picked here counts —
+            these rosters are deleted afterwards.
+          </span>
+        </div>
+      )}
 
       {banner && <div className="mb-3"><Note tone={banner.tone}>{banner.text}</Note></div>}
 
@@ -562,6 +579,9 @@ function Controls({ admin, draft, teams, pool, onDone, setBanner }) {
   const [seconds, setSeconds] = useState(String(draft.pickSeconds));
   const [confirmText, setConfirmText] = useState('');
   const [showReset, setShowReset] = useState(false);
+  // Unticked every time this panel mounts. A rehearsal flag that remembers
+  // itself is one an organizer stops reading, and the reading is the point.
+  const [mock, setMock] = useState(false);
 
   useEffect(() => { setSeconds(String(draft.pickSeconds)); }, [draft.pickSeconds]);
 
@@ -627,14 +647,36 @@ function Controls({ admin, draft, teams, pool, onDone, setBanner }) {
           </div>
         )}
 
+        {/* Sits directly above the start button, not in a settings panel
+            somewhere else: the decision is made in the same second as the
+            click, by somebody who has probably been asked "are we doing the
+            real one now?" thirty seconds earlier. */}
+        {draft.status === 'pending' && (
+          <label className="flex items-start gap-2.5 text-[13px] cursor-pointer max-w-[60ch]">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={mock}
+              onChange={(e) => setMock(e.target.checked)}
+            />
+            <span>
+              This is a <strong>mock draft</strong> — a rehearsal
+              <span className="text-ash">
+                {' '}· labels it everywhere, and the captains&apos; DM says so before
+                anything else. Cleared when the draft is reset.
+              </span>
+            </span>
+          </label>
+        )}
+
         <div className="flex items-end gap-2 flex-wrap">
           {draft.status === 'pending' && (
             <Button
-              variant="good"
+              variant={mock ? 'ghost' : 'good'}
               disabled={busy || !admin?.canStart}
-              onClick={() => call('start', { pick_seconds: Number(seconds) })}
+              onClick={() => call('start', { pick_seconds: Number(seconds), mock })}
             >
-              {busy === 'start' ? 'Starting…' : 'Start the draft'}
+              {busy === 'start' ? 'Starting…' : mock ? 'Start the mock draft' : 'Start the draft'}
             </Button>
           )}
           {draft.status === 'live' && (

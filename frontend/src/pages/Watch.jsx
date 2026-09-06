@@ -139,6 +139,18 @@ export default function Watch() {
           </div>
         </div>
 
+        {/* Beside the tournament's own name, because that is where a viewer
+            reads what they are watching. Only on the draft scene: a bracket is
+            a bracket whatever the draft that filled it was, and the badge would
+            be captioning the wrong thing. */}
+        {showing === 'draft' && d?.isMock && (
+          <span className="px-[1vw] py-[0.5vh] rounded border border-oxblood/70 bg-oxblooddeep
+                           text-[1.05vh] uppercase tracking-[0.24em] text-crimsonbright
+                           whitespace-nowrap shrink-0">
+            Mock draft · not the real one
+          </span>
+        )}
+
         <div className="ml-auto flex items-baseline gap-[2.5vw] mono">
           {/* Draft numbers belong to the draft scene. Leaving "Pick 27 / 464"
               above a bracket is a caption for a different broadcast. */}

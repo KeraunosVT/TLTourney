@@ -703,6 +703,11 @@ async function assembleState(t, d) {
     tournament: { name: t.name, status: t.status, rosterSize: t.roster_size },
     draft: {
       status: d.status,
+      // Reaches the captains' page, the stream scene and the overlay from here.
+      // `=== true` rather than passthrough so a row from before migration 019
+      // reads false instead of undefined, which renders as "not a mock" either
+      // way but stops a `null` reaching a badge that tests for it.
+      isMock: d.is_mock === true,
       pickSeconds: d.pick_seconds,
       currentPick: d.current_pick,
       totalPicks: total(d),
@@ -1096,9 +1101,15 @@ organizerRouter.post('/start', async (req, res) => {
     return res.status(400).json({ error: 'The pick clock is a whole number of seconds, 15 to 1800.' });
   }
 
+  // A rehearsal, not the real one. Opt-IN rather than opt-out: the default has
+  // to be the answer that is safe when nobody thought about the question, and
+  // a real draft quietly marked as practice is the worse of the two mistakes.
+  const mock = req.body?.mock === true;
+
   const snapshot = teams.map((x) => x.id);   // already in seed order
   const { data, error } = await supabase.from('drafts').update({
     status: 'live',
+    is_mock: mock,
     order_snapshot: snapshot,
     rounds: check.rounds,
     pick_seconds: seconds,
@@ -1118,8 +1129,19 @@ organizerRouter.post('/start', async (req, res) => {
 
   armTimer(t, data);
   await audit(req.user, 'draft.start', null, {
-    teams: teams.length, rounds: check.rounds, picks: totalPicks(teams.length, check.rounds), pick_seconds: seconds,
+    mock, teams: teams.length, rounds: check.rounds,
+    picks: totalPicks(teams.length, check.rounds), pick_seconds: seconds,
   });
+
+  // The caveat LEADS the message, and that placement is the whole point of it.
+  // A Discord notification preview shows the first line and truncates the rest,
+  // so a rehearsal whose warning sits in the second paragraph has already read
+  // as the real draft by the time anybody opens it — and the captain who acts
+  // on a preview is exactly the one who joined late and is in a hurry.
+  const opener = mock
+    ? '⚠️ **MOCK DRAFT — a rehearsal, not the real one.** Nothing picked here counts, and '
+      + `the rosters are deleted afterwards.\n\n🏁 The **${t.name}** mock draft has started. `
+    : `🏁 The **${t.name}** draft has started. `;
 
   // Tell the captains it has begun, and where they sit. Non-fatal, like every
   // DM in this app: the draft is running whether or not Discord cooperates.
@@ -1127,7 +1149,7 @@ organizerRouter.post('/start', async (req, res) => {
     const seatIndex = snapshot.indexOf(teamId);
     for (const c of list) {
       if (!c.discord_id) continue;
-      sendDM(c.discord_id, `🏁 The **${t.name}** draft has started. `
+      sendDM(c.discord_id, opener
         + `**${teams.find((x) => x.id === teamId)?.name}** picks ${ordinal(seatIndex + 1)} of ${teams.length}, `
         + `${check.rounds} rounds, ${seconds}s a pick.`);
     }
@@ -1339,8 +1361,12 @@ organizerRouter.post('/reset', async (req, res) => {
     else restored = restore.length;
   }
 
+  // is_mock is cleared with the rest. Whether a draft is a rehearsal is decided
+  // when it STARTS, and leaving the flag set would carry a Tuesday mock's label
+  // onto Saturday's real draft — the one direction of that mistake that talks
+  // a room out of taking the real one seriously.
   const { data, error } = await supabase.from('drafts').update({
-    status: 'pending', current_pick: 1, pick_deadline: null, paused_reason: null,
+    status: 'pending', is_mock: false, current_pick: 1, pick_deadline: null, paused_reason: null,
     order_snapshot: [], rounds: 0, started_at: null, completed_at: null,
   }).eq('tournament_id', t.id).select('*').single();
   if (error) return res.status(500).json({ error: 'Could not reset the draft.' });
