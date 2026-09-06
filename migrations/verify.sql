@@ -76,9 +76,23 @@ select '003 · roster_size is GENERATED, not editable',
                where table_schema = 'public' and table_name = 'tournaments'
                  and column_name = 'roster_size' and is_generated = 'ALWAYS')
 union all
-select '003 · roster is 8 x 6 + 12 = 60',
-       (select party_count = 8 and party_size = 6 and sub_count = 12 and roster_size = 60
-          from tournaments order by created_at limit 1)
+-- 003 set this to 12 subs / 60. 018 raised it to 18 / 66, so the numbers are
+-- asserted there instead — the generated-column rule above is what 003 is
+-- actually responsible for, and it is unchanged.
+-- ── 018 ────────────────────────────────────────────────────────────────────
+select '018 · new seasons default to 18 subs',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'tournaments'
+                 and column_name = 'sub_count' and column_default = '18')
+union all
+-- The RUNNING season, matched the way currentTournament matches it: oldest
+-- unfinished. Deliberately not `order by created_at limit 1` over the whole
+-- table, which is what this line used to be — once a season is archived that
+-- picks the archived one, which 018 correctly leaves on 12, and this would
+-- read false on a database that is entirely correct.
+select '018 · the running season is 8 x 6 + 18 = 66',
+       (select party_count = 8 and party_size = 6 and sub_count = 18 and roster_size = 66
+          from tournaments where status <> 'complete' order by created_at limit 1)
 union all
 -- ── 004 ────────────────────────────────────────────────────────────────────
 select '004 · teams table',

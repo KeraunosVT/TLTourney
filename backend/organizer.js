@@ -292,9 +292,12 @@ router.put('/tournament', async (req, res) => {
  * archived — a button that appears to do nothing, then does something
  * surprising a month later.
  *
- * Everything but the name defaults: 8 parties of 6 plus 12 subs, and the party
- * template that matches. Status is 'setup', not 'signups', so signups open when
- * an organizer says so rather than the instant the row exists.
+ * Everything but the name defaults: 8 parties of 6 plus 18 subs — 66 — and the
+ * party template that matches. Those numbers are COLUMN DEFAULTS, not values
+ * written here (see migration 018), which is why this insert names only two
+ * fields and why changing a roster default is a migration rather than an edit
+ * to this function. Status is 'setup', not 'signups', so signups open when an
+ * organizer says so rather than the instant the row exists.
  */
 router.post('/tournament', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
