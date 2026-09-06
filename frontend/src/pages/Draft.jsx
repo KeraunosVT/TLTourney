@@ -177,6 +177,7 @@ export default function Draft() {
         <div className="flex flex-col gap-4">
           <OnDeck draft={d} teams={teamsById} you={you} />
           <RoleNeeds team={teamsById[you?.teamId]} demand={state.demand} />
+          <YourRoster you={you} />
           <Feed picks={state.picks} teams={teamsById} />
           <Standings teams={state.teams} you={you} />
         </div>
@@ -590,6 +591,90 @@ function RoleNeeds({ team, demand }) {
           </p>
         )}
       </div>
+    </Panel>
+  );
+}
+
+// ── Everyone you have taken ─────────────────────────────────────────────────
+// The second thing captains asked for after the first mock. The picks feed
+// runs newest-first across every team and the standings show a count, so the
+// only way to answer "who do I actually have" mid-draft was to remember it.
+//
+// GROUPED BY ROLE, not by pick order, because it sits directly under the role
+// counts and exists to answer the question those counts raise: "Healer 20/20"
+// invites "which twenty", and a chronological list makes that a counting
+// exercise. Pick order survives inside each group, so "who did I just take" is
+// still the last name in its section.
+//
+// Only ever the captain's own team. Every other team's roster is capped at the
+// newest eight on the wire — see `shown` in backend/draft.js — and this one is
+// not, because it travels to one person instead of to every viewer.
+function YourRoster({ you }) {
+  const [open, setOpen] = useState(true);
+  const roster = you?.roster;
+  if (!roster) return null;
+
+  // Anybody whose role was never recorded still has to appear. They are on the
+  // roster and they cost a pick, and a list that quietly drops them would not
+  // add up against the count in the header.
+  const groups = [...ROLES, null]
+    .map((role) => ({
+      role,
+      members: roster.filter((m) => (role ? m.role === role : !ROLES.includes(m.role))),
+    }))
+    .filter((g) => g.members.length > 0);
+
+  return (
+    <Panel
+      title="Your roster"
+      right={
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="text-xs text-ash hover:text-bone underline underline-offset-2"
+        >
+          {open ? 'hide' : `show ${roster.length}`}
+        </button>
+      }
+    >
+      {open && (
+        // Capped and scrollable: a full bench is 66 names and this panel has
+        // the pick clock above it. Growing to the height of the roster would
+        // push everything a captain acts on off the screen.
+        <div className="max-h-[42vh] overflow-y-auto">
+          {roster.length === 0 ? (
+            <Empty>Nobody yet — your first pick starts this list.</Empty>
+          ) : (
+            groups.map(({ role, members }) => (
+              <div key={role || 'unset'} className="border-b border-line/40 last:border-b-0">
+                <div className="px-4 pt-2.5 pb-1 flex items-baseline gap-2">
+                  <span className="text-[10px] uppercase tracking-[0.14em] text-ash">
+                    {role || 'role not set'}
+                  </span>
+                  <span className="mono text-[11px] text-dim">{members.length}</span>
+                </div>
+                <div className="pb-1.5">
+                  {members.map((m) => (
+                    <div
+                      key={m.id}
+                      className="px-4 py-1 flex items-baseline gap-2 text-[12.5px]"
+                    >
+                      {/* A captain is on the roster because they captain, and
+                          did not cost a pick. Marked so the numbers reconcile. */}
+                      <span className="mono text-[10px] text-dim w-8 shrink-0 text-right">
+                        {m.via === 'captain' ? '★' : m.draft_pick ?? '—'}
+                      </span>
+                      <span className="truncate">{m.player_name}</span>
+                      <span className="text-[11px] text-ash truncate ml-auto">
+                        {(m.classes || []).join(' · ') || 'no class'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </Panel>
   );
 }

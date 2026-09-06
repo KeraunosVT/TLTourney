@@ -700,7 +700,7 @@ async function assembleState(t, d) {
     }, 0);
   });
 
-  return {
+  const state = {
     tournament: { name: t.name, status: t.status, rosterSize: t.roster_size },
     draft: {
       status: d.status,
@@ -747,6 +747,13 @@ async function assembleState(t, d) {
     })(),
     picks: (picksRes.data || []).filter((p) => p.player).map(feedPlayer),
   };
+
+  // The rosters come back BESIDE the state, never inside it. Everything in
+  // `state` is spread into every response including the unauthenticated stream
+  // one, and eight full rosters on a two-second poll is the megabyte a second
+  // the note above `shown` exists to prevent. The authed route lifts exactly
+  // one team out of this — the captain's own — and nothing else ever sees it.
+  return { state, rosters };
 }
 
 // ── One read, however many people are watching ──────────────────────────────
@@ -772,7 +779,7 @@ async function snapshot(t, d) {
   if (hit && Date.now() - hit.at < SNAPSHOT_MS) return hit.job;
 
   const job = (async () => {
-    const [state, taken, poolRes] = await Promise.all([
+    const [assembled, taken, poolRes] = await Promise.all([
       assembleState(t, d),
       rosteredIds(t.id),
       supabase.from('player_signups').select(PLAYER)
@@ -780,7 +787,15 @@ async function snapshot(t, d) {
         .order('player_name', { ascending: true }),
     ]);
     if (poolRes.error) throw new Error(`draft pool read failed: ${poolRes.error.message}`);
-    return { state, taken, pool: (poolRes.data || []).filter((p) => !taken.has(p.id)) };
+    return {
+      state: assembled.state,
+      // Cached with the rest, because computing them was never the expensive
+      // part — sending them is. Held here so the authed route can hand a
+      // captain their own without a second round trip on every poll.
+      rosters: assembled.rosters,
+      taken,
+      pool: (poolRes.data || []).filter((p) => !taken.has(p.id)),
+    };
   })();
 
   snapshots.set(t.id, { at: Date.now(), job });
@@ -881,7 +896,7 @@ router.get('/', async (req, res) => {
     const d = await liveDraft(t);
     if (!d) return res.json({ tournament: null, draft: null, teams: [], picks: [] });
 
-    const [{ state, taken, pool }, seatsHeld] = await Promise.all([
+    const [{ state, taken, pool, rosters }, seatsHeld] = await Promise.all([
       snapshot(t, d),
       // NOT cached, and deliberately: captaincy is the permission this page's
       // pick button hangs off, and a captain swapped a minute ago must lose it
@@ -904,6 +919,13 @@ router.get('/', async (req, res) => {
         // "Three picks away" is what a captain actually plans against — the
         // absolute pick number tells them nothing without counting.
         picksAway: next === null ? null : next - d.current_pick,
+        // THEIR OWN roster, all of it. Every team's `recent` is capped at the
+        // newest eight because it goes to everybody; this is one team's, on a
+        // route only that team's captains can reach, so the cap has nothing to
+        // pay for. Already sorted captains-first then pick order by
+        // rostersByTeam, and mapped through `shown` — a captain reading their
+        // own bench does not need Discord handles to do it.
+        roster: (rosters.get(mine.id) || []).map(shown),
       };
 
       // Their board, best first, with anybody already gone filtered out. This
