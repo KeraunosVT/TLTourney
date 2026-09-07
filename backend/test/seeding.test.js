@@ -67,6 +67,23 @@ test('keys are unique and namespaced away from the bracket', () => {
   assert.strictEqual(keys.filter((k) => b.includes(k)).length, 0);
 });
 
+test('EVERY FIXTURE CARRIES A KIND', () => {
+  // The bug that stopped the seeding stage writing at all, and it was invisible
+  // from here: backend/bracket.js maps this field onto `matches.kind`, and
+  // supabase-js builds its `columns` parameter from Object.keys() — which
+  // includes a key whose value is undefined, while JSON.stringify drops the
+  // value. PostgREST was told the payload had a `kind` column, found nothing,
+  // and wrote NULL into a not-null column.
+  //
+  // generateBracket sets this through markByes. A round-robin has no byes and
+  // never ran it, so nothing was setting it.
+  for (const n of [2, 4, 5, 8]) {
+    generateRoundRobin(n).matches.forEach((m) => {
+      assert.strictEqual(m.status, 'match', `${n} teams: ${m.key} has no kind`);
+    });
+  }
+});
+
 test('too few teams produces nothing rather than throwing', () => {
   [0, 1, -3, null, undefined, NaN].forEach((n) => {
     const g = generateRoundRobin(n);

@@ -53,7 +53,20 @@ const fromEngine = (m, tournamentId) => ({
   idx: m.idx,
   slot_a: m.a,
   slot_b: m.b,
-  kind: m.status,           // the engine calls it status; here it is what KIND of match it is
+  // The engine calls it status; here it is what KIND of match it is.
+  //
+  // DEFAULTED, and the fallback is load-bearing rather than tidy. An undefined
+  // value here does NOT fall through to the column default: supabase-js builds
+  // its `columns` parameter from Object.keys(), which INCLUDES a key whose
+  // value is undefined, while JSON.stringify drops the value — so PostgREST is
+  // told the payload has a `kind` column, finds nothing, and writes NULL into a
+  // not-null column. The insert fails with a constraint violation that names
+  // the column but not the cause.
+  //
+  // generateBracket sets status on every match through markByes; the
+  // round-robin has no byes and so never ran it. Anything reaching here without
+  // one is a match somebody plays.
+  kind: m.status || 'match',
   advances: m.advances || null,
   is_reset: !!m.reset,
   // Only the grand final sets this; everything else takes the column default
@@ -672,8 +685,14 @@ organizerRouter.post('/seeding', async (req, res) => {
           + 'run migrations/026_seeding_stage.sql first.',
       });
     }
+    // The database's own words, on an ORGANIZER-ONLY route. A generic 500 here
+    // is what turned a one-line bug into a hunt: "could not write the seeding
+    // stage" says nothing a person can act on, while the constraint name says
+    // exactly which column was refused.
     console.error('seeding insert failed:', insErr.message);
-    return res.status(500).json({ error: 'Could not write the seeding stage.' });
+    return res.status(500).json({
+      error: `Could not write the seeding stage — ${insErr.message}`,
+    });
   }
 
   // Both sides of every fixture are SEED slots, so the same position-based
@@ -811,7 +830,7 @@ organizerRouter.post('/generate', async (req, res) => {
   const { error: insErr } = await supabase.from('matches').insert(rows);
   if (insErr) {
     console.error('bracket insert failed:', insErr.message);
-    return res.status(500).json({ error: 'Could not write the bracket.' });
+    return res.status(500).json({ error: `Could not write the bracket — ${insErr.message}` });
   }
 
   // Seed the first round, then let walkovers cascade.

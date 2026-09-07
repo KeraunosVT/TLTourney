@@ -692,9 +692,105 @@ select '025 · every team in the running season has an invite',
        and not exists (
          select 1 from teams t
            join tournaments o on o.id = t.tournament_id
-          where o.status <> 'complete' and to_jsonb(t)->>'discord_url' is null);
+          where o.status <> 'complete' and to_jsonb(t)->>'discord_url' is null)
+union all
+-- ── 026 ────────────────────────────────────────────────────────────────────
+-- The CHECK has to admit 'RR' before a seeding fixture can be written at all.
+-- Read out of the constraint's own definition rather than by trying an insert.
+select '026 · matches accepts a seeding stage',
+       exists (select 1 from pg_constraint
+               where conname = 'matches_bracket_valid'
+                 and pg_get_constraintdef(oid) like '%''RR''%')
+union all
+-- "If drawn" on purpose. A season before its seeding stage exists is not a
+-- broken database, and a row that sits red for three weeks is a row people
+-- stop reading.
+select '026 · the seeding stage, if drawn, is every pair exactly once',
+       coalesce((
+         select (select count(*) from matches m
+                  where m.tournament_id = o.id and m.bracket = 'RR') in (
+                  0,
+                  (select count(*) * (count(*) - 1) / 2 from teams t
+                    where t.tournament_id = o.id))
+           from tournaments o where o.status <> 'complete'
+          order by o.created_at limit 1), true)
+union all
+select '026 · the drawn bracket uses the NEW final (bo5, no reset) — false means it predates 026',
+       coalesce((
+         select (select count(*) from matches m
+                  where m.tournament_id = o.id and m.bracket = 'GF') in (0, 1)
+            and not exists (select 1 from matches m
+                             where m.tournament_id = o.id and m.key = 'GF2-0'
+                               and m.kind <> 'void')
+            and not exists (select 1 from matches m
+                             where m.tournament_id = o.id and m.bracket = 'GF'
+                               and m.best_of <> 5)
+           from tournaments o where o.status <> 'complete'
+          order by o.created_at limit 1), true)
+union all
+-- ── 027 ────────────────────────────────────────────────────────────────────
+select '027 · match_weapons table',
+       to_regclass('public.match_weapons') is not null
+union all
+select '027 · one screenshot per team per match',
+       exists (select 1 from pg_constraint where conname = 'match_weapons_one_per_team')
+union all
+-- The bucket is where the bytes actually live. The table can exist without it
+-- and every upload would then fail at the storage call, not the insert.
+select '027 · the weapons storage bucket exists',
+       exists (select 1 from storage.buckets where id = 'weapons')
+union all
+-- PRIVATE. A public bucket would make every team's comp readable by URL for
+-- the rest of time, which is the opposite of why the API signs these.
+select '027 · and it is private',
+       exists (select 1 from storage.buckets where id = 'weapons' and public = false)
+union all
+-- ── 028 ────────────────────────────────────────────────────────────────────
+select '028 · team_players.playing exists',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'team_players'
+                 and column_name = 'playing')
+union all
+select '028 · drafts carries the compensation pick',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'drafts'
+                 and column_name = 'comp_team_id')
+       and exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'drafts'
+                     and column_name = 'comp_after_pick')
+union all
+-- Both or neither. One without the other reads as "no compensation" while
+-- actually being a half-applied rule.
+select '028 · the compensation columns are paired by a constraint',
+       exists (select 1 from pg_constraint where conname = 'drafts_comp_pair')
+union all
+-- THE ONE TO READ. 028 marks Zaels by TEAM NAME and PLAYER NAME, because a
+-- migration has no ids — so a rename, a stray space, or the apostrophe in
+-- another team's name makes it match nothing, silently. That surfaces on draft
+-- night as a team that never gets its extra pick.
+select '028 · exactly one rostered member is marked not playing',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'team_players'
+                 and column_name = 'playing')
+       and (select count(*) from team_players r
+              join tournaments o on o.id = r.tournament_id
+             where o.status <> 'complete'
+               and to_jsonb(r)->>'playing' = 'false') = 1
+union all
+-- The draft refuses to start if two teams are short, because only one pick can
+-- be inserted. This is that rule, checked against the data rather than trusted
+-- to the code that enforces it.
+select '028 · no team is short more than one playing member',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'team_players'
+                 and column_name = 'playing')
+       and not exists (
+         select 1 from team_players r
+           join tournaments o on o.id = r.tournament_id
+          where o.status <> 'complete' and to_jsonb(r)->>'playing' = 'false'
+          group by r.team_id having count(*) > 1);
 
--- ── The two that name names ─────────────────────────────────────────────────
+-- ── The ones that name names ────────────────────────────────────────────────
 -- The checks above are booleans, which is right for a pass/fail sweep and
 -- useless once something reads false. Run these to find out WHICH.
 --
@@ -717,6 +813,63 @@ select '025 · every team in the running season has an invite',
 --    where o.status <> 'complete' and p.role is not null
 --    group by tm.name, p.role
 --    order by tm.name, p.role;
+--
+-- WHO is not playing, and therefore whose team is owed the extra pick. Run this
+-- straight after 028 — the row above says "exactly one" and this says which:
+--
+--   select tm.name as team, p.player_name, r.via
+--     from team_players r
+--     join teams tm on tm.id = r.team_id
+--     join tournaments o on o.id = tm.tournament_id
+--     join player_signups p on p.id = r.signup_id
+--    where o.status <> 'complete' and r.playing = false;
+--
+-- What each team will FIELD, which is the number the compensation pick exists
+-- to equalise. Before the draft it is the captains; after it, every row here
+-- should read the same:
+--
+--   select tm.name, count(*) filter (where r.playing) as playing, count(*) as rostered
+--     from team_players r
+--     join teams tm on tm.id = r.team_id
+--     join tournaments o on o.id = tm.tournament_id
+--    where o.status <> 'complete'
+--    group by tm.name order by tm.name;
+--
+-- ── 027's data checks, run separately ───────────────────────────────────────
+-- Same reason 022's live down here: they name match_weapons directly, and a
+-- query naming a table that does not exist fails at PARSE time and would abort
+-- the whole sweep rather than reading false.
+--
+-- Which matches are still missing a weapons screenshot. The one to run on match
+-- night — the bracket flags it per card, this is the list:
+--
+--   select m.key, m.bracket,
+--          (w_a.id is not null) as team_a_done,
+--          (w_b.id is not null) as team_b_done
+--     from matches m
+--     join tournaments o on o.id = m.tournament_id
+--     left join match_weapons w_a on w_a.match_id = m.id and w_a.team_id = m.team_a_id
+--     left join match_weapons w_b on w_b.match_id = m.id and w_b.team_id = m.team_b_id
+--    where o.status <> 'complete' and m.kind = 'match'
+--      and m.team_a_id is not null and m.team_b_id is not null
+--    order by m.bracket, m.round, m.idx;
+--
+-- Screenshots attached to a team that is no longer in their match. Keying by
+-- team rather than by slot makes these visible instead of silently becoming the
+-- other team's comp — should be empty:
+--
+--   select m.key, w.team_id
+--     from match_weapons w
+--     join matches m on m.id = w.match_id
+--    where w.team_id not in (coalesce(m.team_a_id, w.team_id),
+--                            coalesce(m.team_b_id, w.team_id));
+--
+-- Files in the bucket that nothing references. Harmless, but this is how you
+-- find them after a match or a tournament has been deleted:
+--
+--   select o.name from storage.objects o
+--    where o.bucket_id = 'weapons'
+--      and not exists (select 1 from match_weapons w where w.storage_path = o.name);
 
 -- ── 022's data checks, run separately ───────────────────────────────────────
 -- These two name team_party_slots directly, and a query naming a table that

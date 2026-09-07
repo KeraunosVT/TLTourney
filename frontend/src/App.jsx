@@ -11,6 +11,7 @@ import Setup from './pages/Setup';
 import Teams from './pages/Teams';
 import Board from './pages/Board';
 import Draft from './pages/Draft';
+import Picks from './pages/Picks';
 import Parties from './pages/Parties';
 import Comp from './pages/Comp';
 import Bracket from './pages/Bracket';
@@ -158,6 +159,10 @@ export default function App() {
                 overlay rather than a scene you cut to. It reads the same cast
                 route the bracket scene does. */}
             <Route path="/lower" element={<Lower />} />
+            {/* Public like the scenes above it: a draft record is the thing
+                being broadcast, and somebody following a link out of the
+                stream has no session. */}
+            <Route path="/picks" element={<Picks />} />
 
             <Route element={<Gate />}>
               <Route index element={<Navigate to="/signup" replace />} />

@@ -909,11 +909,21 @@ async function assembleState(t, d) {
 const SNAPSHOT_MS = 1200;
 const snapshots = new Map();
 
+// The full pick history, cached like the others and cleared beside them.
+// Declared HERE rather than beside its route: invalidate() below clears it, and
+// a const referenced before its declaration only works while nothing runs
+// during module evaluation — which is true today and is not a thing to leave
+// depending on reading order.
+const pickLists = new Map();
+const PICKS_MS = 5000;
+
 function invalidate(tournamentId) {
   snapshots.delete(tournamentId);
   // Both, always. A pick changes who is available, and a stale full pool would
   // offer a captain somebody who was taken a second ago.
   pools.delete(tournamentId);
+  // And the history, which grows by one on every pick.
+  pickLists.delete(tournamentId);
 }
 
 async function snapshot(t, d) {
@@ -1073,6 +1083,75 @@ publicRouter.get('/', async (req, res) => {
     });
   } catch (err) {
     readFailure(res, err, 'public draft read');
+  }
+});
+
+// ── Every pick, for anybody ─────────────────────────────────────────────────
+// The state route carries the newest twenty, which is what a live page needs
+// and what the two-second poll can afford. This is the whole history, and it is
+// a SEPARATE route on purpose: 257 picks is roughly forty kilobytes, and
+// folding it into a payload that is fetched every two seconds by every viewer
+// would undo the read work in `snapshot` at a stroke.
+//
+// Fetched once when somebody opens the page, and again only when they ask.
+// Public, like the rest of /api/stream: this is the thing being broadcast, and
+// a viewer who followed a link from the stream has no session.
+//
+// Cached until a pick invalidates it — a draft is one write every minute or two
+// against a page a hundred people might open at once.
+publicRouter.get('/picks', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.json({ tournament: null, teams: [], picks: [], total: 0 });
+
+  try {
+    const hit = pickLists.get(t.id);
+    if (hit && Date.now() - hit.at < PICKS_MS) return res.json(await hit.job);
+
+    const job = (async () => {
+      const [teamsRes, picksRes, d] = await Promise.all([
+        supabase.from('teams').select(TEAM).eq('tournament_id', t.id)
+          .order('seed', { ascending: true, nullsFirst: false }),
+        // OLDEST first. This is a record being read in order, not a feed —
+        // "who went first" is the question, and a reversed list makes the
+        // reader do the arithmetic to find pick 1.
+        supabase.from('draft_picks')
+          .select(`pick_number, round, team_id, auto, made_by, created_at, player:player_signups (${PLAYER})`)
+          .eq('tournament_id', t.id)
+          .order('pick_number', { ascending: true }),
+        liveDraft(t),
+      ]);
+      if (picksRes.error) throw new Error(`picks read failed: ${picksRes.error.message}`);
+
+      const comp = compOf(d);
+      return {
+        tournament: { name: t.name, status: t.status },
+        draft: {
+          status: d?.status ?? null,
+          rounds: d?.rounds ?? 0,
+          totalPicks: d ? total(d) : 0,
+          isMock: d?.is_mock === true,
+          compensation: comp,
+        },
+        teams: teamsRes.data || [],
+        // Redacted through the same allow-list the live feed uses. `made_by`
+        // is dropped: which organizer or captain clicked is on the audit log,
+        // not on a public page.
+        picks: (picksRes.data || []).filter((p) => p.player).map((p) => ({
+          ...feedPlayer(p),
+          // Flagged here rather than recomputed on the page, so the one pick
+          // that is not part of the snake explains itself in the list too.
+          compensation: !!comp && p.pick_number === comp.afterPick + 1,
+        })),
+        total: (picksRes.data || []).length,
+      };
+    })();
+
+    pickLists.set(t.id, { at: Date.now(), job });
+    res.json(await job);
+  } catch (err) {
+    pickLists.delete(t.id);
+    readFailure(res, err, 'picks read');
   }
 });
 

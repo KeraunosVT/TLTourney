@@ -80,6 +80,12 @@ function generateRoundRobin(teamCount) {
       matches.push({
         key: keyFor('RR', r + 1, idx), bracket: 'RR', round: r + 1, idx,
         a: SEED(lo), b: SEED(hi),
+        // Every fixture is played — a round-robin has no byes and nothing to
+        // void, so markByes is not run over these. Set explicitly rather than
+        // left for the database default: backend/bracket.js maps this field
+        // onto `kind`, and an undefined here reached PostgREST as an explicit
+        // NULL into a not-null column. See the note in fromEngine.
+        status: 'match',
       });
       idx += 1;
     }

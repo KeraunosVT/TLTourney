@@ -724,7 +724,19 @@ function YourRoster({ you }) {
 
 function Feed({ picks, teams }) {
   return (
-    <Panel title="Picks" right={<span className="text-xs text-ash">most recent first</span>}>
+    <Panel
+      title="Picks"
+      right={
+        <a
+          href="/picks"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs text-ash hover:text-crimsonbright underline underline-offset-2"
+        >
+          all picks ↗
+        </a>
+      }
+    >
       {picks.length === 0 ? (
         <Empty>Nothing yet.</Empty>
       ) : (
