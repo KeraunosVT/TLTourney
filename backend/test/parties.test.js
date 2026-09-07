@@ -13,6 +13,7 @@ const assert = require('node:assert');
 const {
   DEFAULT_PARTY_TEMPLATE, DEFAULT_SUB_SLOTS, SLOT_NAMES, resizeTemplate, templateFits,
   startersPerTeam, roleDemand, rosterDemand, resizeSubs, subsFit,
+  roleRoom, rolesWithRoom,
 } = require('../../shared/parties.cjs');
 
 test('the default template is 8 parties of 6', () => {
@@ -94,12 +95,12 @@ test('resizing is idempotent', () => {
 // counted off 48 starters while the roster total counted 66, so a pool could
 // report every role covered and be twenty players short of a bench.
 
-test('the default bench is 18 slots — 4 tank, 10 dps, 4 healer', () => {
+test('the default bench is 18 slots — 4 tank, 8 dps, 6 healer', () => {
   assert.strictEqual(DEFAULT_SUB_SLOTS.length, 18);
   const count = (r) => DEFAULT_SUB_SLOTS.filter((s) => s === r).length;
   assert.strictEqual(count('Tank'), 4);
-  assert.strictEqual(count('DPS'), 10);
-  assert.strictEqual(count('Healer'), 4);
+  assert.strictEqual(count('DPS'), 8);
+  assert.strictEqual(count('Healer'), 6);
 });
 
 test('ROSTER demand is starters PLUS bench', () => {
@@ -107,15 +108,15 @@ test('ROSTER demand is starters PLUS bench', () => {
   const whole = rosterDemand(DEFAULT_PARTY_TEMPLATE, DEFAULT_SUB_SLOTS, 1);
 
   assert.deepStrictEqual(whole.Tank, { min: 13, max: 20 });
-  assert.deepStrictEqual(whole.DPS, { min: 26, max: 33 });
-  assert.deepStrictEqual(whole.Healer, { min: 20, max: 25 });
+  assert.deepStrictEqual(whole.DPS, { min: 24, max: 31 });
+  assert.deepStrictEqual(whole.Healer, { min: 22, max: 27 });
 
   // Every floor moved by exactly the bench's count of that role, and nothing
   // else did. Stated as a relation rather than three more constants so it
-  // survives the next time the template is retuned.
+  // survives the next time the bench is retuned.
   assert.strictEqual(whole.Tank.min - starters.Tank.min, 4);
-  assert.strictEqual(whole.DPS.min - starters.DPS.min, 10);
-  assert.strictEqual(whole.Healer.min - starters.Healer.min, 4);
+  assert.strictEqual(whole.DPS.min - starters.DPS.min, 8);
+  assert.strictEqual(whole.Healer.min - starters.Healer.min, 6);
 });
 
 test('the floors and the flexible slots reconcile to the whole roster', () => {
@@ -164,6 +165,81 @@ test('the bench trims from the END and pads with Any Role', () => {
     ['Tank', 'Any Role', 'Any Role'],
   );
   assert.deepStrictEqual(resizeSubs(null, 2), ['Any Role', 'Any Role']);
+});
+
+// ── The role cap ────────────────────────────────────────────────────────────
+// The ceiling stopped being advice in 024: the draft REFUSES a pick past it.
+// That makes roleRoom a rule rather than a readout, and every one of these is
+// a way a team could otherwise end up with a player who cannot be seated.
+const DEMAND = rosterDemand(DEFAULT_PARTY_TEMPLATE, DEFAULT_SUB_SLOTS, 1);
+const roster = (spec) => Object.entries(spec)
+  .flatMap(([role, n]) => Array.from({ length: n }, () => ({ role })));
+
+test('THE CAP IS THE NUMBER OF SEATS, not a preference', () => {
+  // Tank: 9 slots only a tank can fill, 7 flexible ones it is eligible for,
+  // 4 on the bench. Twenty, and the twenty-first has nowhere to sit.
+  assert.deepStrictEqual(
+    roleRoom(roster({ Tank: 19 }), DEMAND, 'Tank'),
+    { have: 19, max: 20, room: 1 },
+  );
+  assert.deepStrictEqual(
+    roleRoom(roster({ Tank: 20 }), DEMAND, 'Tank'),
+    { have: 20, max: 20, room: 0 },
+  );
+});
+
+test('room floors at zero rather than going negative', () => {
+  // A roster can be over the cap already — 024 can land on a team that
+  // over-drafted under the old numbers. It reports no room, not minus three.
+  assert.strictEqual(roleRoom(roster({ Healer: 30 }), DEMAND, 'Healer').room, 0);
+});
+
+test('only the role being asked about is counted', () => {
+  const mixed = roster({ Tank: 20, DPS: 5, Healer: 5 });
+  assert.strictEqual(roleRoom(mixed, DEMAND, 'Tank').room, 0, 'tank is full');
+  assert.strictEqual(roleRoom(mixed, DEMAND, 'DPS').room, 26, 'dps is not');
+  assert.deepStrictEqual(rolesWithRoom(mixed, DEMAND), ['DPS', 'Healer']);
+});
+
+test('players with no recorded role never fill a cap', () => {
+  // They are exempt from the check on the way in, so counting them against a
+  // role would close a door on the strength of a question nobody answered.
+  const unset = [...roster({ Tank: 4 }), { role: null }, { role: undefined }, {}];
+  assert.strictEqual(roleRoom(unset, DEMAND, 'Tank').have, 4);
+});
+
+test('an empty or missing roster has the whole cap available', () => {
+  [[], null, undefined].forEach((r) => {
+    assert.strictEqual(roleRoom(r, DEMAND, 'Healer').room, 27);
+  });
+});
+
+test('a role the template does not mention has NO room, not infinite room', () => {
+  // 'Support' is the name that keeps coming back. If one ever reached a roster,
+  // the cap must read zero — the safe direction — rather than treating an
+  // unknown role as unconstrained.
+  assert.deepStrictEqual(
+    roleRoom(roster({ Support: 3 }), DEMAND, 'Support'),
+    { have: 3, max: 0, room: 0 },
+  );
+});
+
+test('THE CAPS DELIBERATELY OVERLAP, and that is a documented limit', () => {
+  // They sum to more than a roster holds, because the 7 flexible slots are
+  // counted once for every role eligible for them. So staying under all three
+  // does NOT prove a roster can be fielded. Asserted so nobody later reads the
+  // cap as a guarantee it never was.
+  const total = DEMAND.Tank.max + DEMAND.DPS.max + DEMAND.Healer.max;
+  assert.strictEqual(total, 78);
+  assert.ok(total > 66, 'ceilings are not simultaneously reachable');
+
+  // Concretely: under every cap, and still unfieldable.
+  const lopsided = roster({ Tank: 20, DPS: 31, Healer: 15 });
+  assert.strictEqual(lopsided.length, 66);
+  ['Tank', 'DPS', 'Healer'].forEach((r) => {
+    assert.ok(roleRoom(lopsided, DEMAND, r).have <= DEMAND[r].max, `${r} within cap`);
+  });
+  assert.ok(15 < DEMAND.Healer.min, 'yet short of the healer floor');
 });
 
 test('subsFit catches each way the bench and the count can disagree', () => {

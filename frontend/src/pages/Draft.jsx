@@ -568,6 +568,11 @@ function RoleNeeds({ team, demand }) {
           const n = have(role);
           const short = Math.max(0, min - n);
           const pct = min === 0 ? 100 : Math.min(100, (n / min) * 100);
+          // The ceiling is a HARD CAP now: the draft refuses a pick that would
+          // pass it, so it is called out rather than shown as trivia. Full
+          // reads differently from short — one is a warning, the other is a
+          // door that is closed.
+          const full = n >= max;
           return (
             <div key={role} className="flex items-center gap-2.5 text-[13px]">
               <span className="w-[52px] flex-none text-ash">{role}</span>
@@ -581,10 +586,14 @@ function RoleNeeds({ team, demand }) {
                 {n}<span className="text-ash">/{min}</span>
               </span>
               <span
-                className="mono text-[10.5px] text-ash w-[48px] text-right"
-                title="ceiling, if every flexible slot went to this role"
+                className={`mono text-[10.5px] w-[62px] text-right ${
+                  full ? 'text-crimsonbright font-semibold' : 'text-ash'
+                }`}
+                title={full
+                  ? `Full — the template has no more seats for a ${role}, so the draft will refuse one.`
+                  : `Cap: the most ${role}s this roster can hold. ${max - n} left.`}
               >
-                max {max}
+                {full ? `full ${max}` : `cap ${max}`}
               </span>
             </div>
           );

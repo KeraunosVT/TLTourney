@@ -34,7 +34,7 @@ const { slotFor, teamOnClock, totalPicks, upcoming, nextPickFor, worstCaseSecond
 const { autoPick } = require('../shared/autopick.cjs');
 const { tierMeta } = require('../shared/board.cjs');
 const { rosterProgress } = require('../shared/roster.cjs');
-const { roleDemand, rosterDemand } = require('../shared/parties.cjs');
+const { roleDemand, rosterDemand, roleRoom } = require('../shared/parties.cjs');
 const { ROLES } = require('../shared/roles.cjs');
 
 // How late a deadline may be before the draft stops itself instead of picking.
@@ -215,11 +215,30 @@ async function chooseAuto(t, d, teamId) {
   ]);
   if (poolRes.error) throw new Error(`autopick pool read failed: ${poolRes.error.message}`);
 
-  const pool = (poolRes.data || []).filter((p) => !taken.has(p.id));
-  const board = (boardRes.data || []).filter((e) => !taken.has(e.signup_id));
   const template = Array.isArray(t.party_template) ? t.party_template : [];
+  const roster = rosters.get(teamId) || [];
 
-  return autoPick(board, pool, rosters.get(teamId) || [], roleDemand(template, 1));
+  // The clock has to obey the role cap too, and it is the harder half: a
+  // captain gets an error and picks again, while an auto-pick that breaks the
+  // cap would be REFUSED by makePick and leave the draft stuck on a team that
+  // cannot pick itself. So the ineligible players are removed from what the
+  // clock is choosing from, rather than the choice being made and then bounced.
+  //
+  // Filtering the BOARD as well as the pool matters: step 1 of autoPick honours
+  // the board above everything, so a captain whose top-ranked player is a
+  // healer they have no seat for would otherwise get exactly that pick.
+  const full = new Set(
+    ROLES.filter((r) => roleRoom(roster, rosterDemand(template, t.sub_slots, 1), r).room <= 0),
+  );
+  const seatable = (role) => !role || !full.has(role);
+
+  const byId = new Map((poolRes.data || []).map((p) => [p.id, p]));
+  const pool = (poolRes.data || [])
+    .filter((p) => !taken.has(p.id) && seatable(p.role));
+  const board = (boardRes.data || [])
+    .filter((e) => !taken.has(e.signup_id) && seatable(byId.get(e.signup_id)?.role));
+
+  return autoPick(board, pool, roster, roleDemand(template, 1));
 }
 
 // ── Prompt expiry ───────────────────────────────────────────────────────────
@@ -464,6 +483,35 @@ async function makePick(t, d, { teamId, signupId, auto = false, madeBy = null, r
   if (!player) return { error: 'That player is not in this tournament.', code: 400 };
   if (player.status !== 'approved') {
     return { error: `${player.player_name} is not an approved signup.`, code: 400 };
+  }
+
+  // THE ROLE CAP. Refused, not warned — this is the one draft rule that is a
+  // fact about seats rather than a judgement about squad building. `max` is
+  // how many of a role the template can hold at all: its exclusive slots, the
+  // flexible ones it is eligible for, and its share of the bench. A pick past
+  // that is a player who can be neither fielded nor benched, and the mistake is
+  // invisible until somebody opens the party builder weeks later and finds a
+  // roster that will not seat.
+  //
+  // Checked BEFORE the pick number is claimed, so a refused pick leaves the
+  // clock exactly where it was and the team can pick again.
+  //
+  // A player with no recorded role is exempt, the same as in the party builder:
+  // a data gap is not a declared mismatch, and refusing them would strand
+  // somebody over a question they were never asked.
+  if (player.role) {
+    const rosters = await rostersByTeam(t.id);
+    const demand = rosterDemand(
+      Array.isArray(t.party_template) ? t.party_template : [], t.sub_slots, 1,
+    );
+    const { have, max, room } = roleRoom(rosters.get(teamId) || [], demand, player.role);
+    if (room <= 0) {
+      return {
+        code: 409,
+        error: `Your roster is full at ${player.role} — ${have} of ${max}, and the template `
+          + `has no more seats for one. Pick ${ROLES.filter((r) => r !== player.role).join(' or ')}.`,
+      };
+    }
   }
 
   // 1. Claim the pick number. THE mutex — see migrations/010.

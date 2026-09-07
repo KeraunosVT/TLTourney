@@ -552,11 +552,27 @@ select '021 · sub_slots is pinned to sub_count by a constraint',
 union all
 -- The constraint above guarantees the LENGTH. This is the composition, which
 -- nothing enforces and which is the number captains actually draft against.
-select '021 · the running bench is 4 tank, 10 dps, 4 healer',
+-- 021 set 4/10/4; 024 moved two seats from damage to healing. The composition
+-- is asserted there instead, since that is the migration that owns it now.
+select '024 · the running bench is 4 tank, 8 dps, 6 healer',
        (select (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'Tank') = 4
-           and (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'DPS') = 10
-           and (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'Healer') = 4
+           and (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'DPS') = 8
+           and (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'Healer') = 6
           from tournaments where status <> 'complete' order by created_at limit 1)
+union all
+-- The cap is enforced in backend/draft.js, so nothing here prevents an
+-- over-drafted roster — but 024 can land on a team that went over under the
+-- OLD numbers, and those rosters need a manual fix rather than another pick.
+-- This is how you find them.
+select '024 · no team is over a role ceiling',
+       not exists (
+         select 1 from team_players r
+           join player_signups p on p.id = r.signup_id
+          where p.role is not null
+          group by r.team_id, p.role
+         having (p.role = 'Tank' and count(*) > 20)
+             or (p.role = 'DPS' and count(*) > 31)
+             or (p.role = 'Healer' and count(*) > 27))
 union all
 -- Same trap as the party template, and worth asserting separately because the
 -- bench is edited through a different field: a bench slot naming a role no

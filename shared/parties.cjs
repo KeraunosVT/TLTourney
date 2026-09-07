@@ -50,11 +50,13 @@ const DEFAULT_PARTY_TEMPLATE = [
 // have been a second, weaker way of saying the same thing, and every function
 // below would have needed a branch for it.
 //
-// 4 Tank, 10 DPS, 4 Healer = 18, which is sub_count after migration 018.
+// 4 Tank, 8 DPS, 6 Healer = 18, which is sub_count after migration 018. The
+// bench moved two seats from damage to healing in 024 — see that migration for
+// what it does to the ceilings, which are now CAPS rather than guidance.
 const DEFAULT_SUB_SLOTS = [
   'Tank', 'Tank', 'Tank', 'Tank',
-  'DPS', 'DPS', 'DPS', 'DPS', 'DPS', 'DPS', 'DPS', 'DPS', 'DPS', 'DPS',
-  'Healer', 'Healer', 'Healer', 'Healer',
+  'DPS', 'DPS', 'DPS', 'DPS', 'DPS', 'DPS', 'DPS', 'DPS',
+  'Healer', 'Healer', 'Healer', 'Healer', 'Healer', 'Healer',
 ];
 
 const canFill = (slotType, role) => (SLOT_TYPES[slotType] || []).includes(role);
@@ -127,6 +129,38 @@ function rosterDemand(template, subSlots, teamCount = 1) {
 }
 
 /**
+ * How much room a roster has left for one role — the HARD CAP.
+ *
+ * `max` from rosterDemand is not a target, it is the number of seats in the
+ * template that this role could ever occupy: the slots only it can fill, plus
+ * every flexible one it is eligible for, plus its share of the bench. Past that
+ * number there is no seat to put the player in — not a tight fit, no seat — so
+ * a pick beyond it buys a player who cannot be fielded and cannot be benched.
+ *
+ * Returns { have, max, room }. `room` is what the draft refuses on when it
+ * reaches zero.
+ *
+ * ⚠️  THIS IS A PER-ROLE CAP, NOT A GUARANTEE OF A LEGAL ROSTER. The three
+ * ceilings overlap — they sum to more than a roster holds, because the
+ * flexible slots are counted once for every role that could take them. A team
+ * can therefore stay under all three caps and still end up unfieldable, by
+ * spending the flexible slots on one role and coming up short elsewhere. This
+ * catches the mistake somebody actually makes (drafting a ninth healer they
+ * have nowhere to put); it does not solve the general packing problem, and
+ * pretending otherwise would be worse than the honest limit.
+ */
+function roleRoom(members, demand, role) {
+  const list = Array.isArray(members) ? members : [];
+  const have = list.filter((m) => m && m.role === role).length;
+  const max = demand?.[role]?.max ?? 0;
+  return { have, max, room: Math.max(0, max - have) };
+}
+
+/** Roles this roster still has a seat for. Used to keep the clock legal. */
+const rolesWithRoom = (members, demand) =>
+  ROLES.filter((role) => roleRoom(members, demand, role).room > 0);
+
+/**
  * Reshape the bench to a new substitute count.
  *
  * The same contract as resizeTemplate, and for the same reason: sub_count and
@@ -195,5 +229,6 @@ const templateFits = (template, partyCount, partySize) =>
 module.exports = {
   SLOT_TYPES, SLOT_NAMES, DEFAULT_PARTY_TEMPLATE, DEFAULT_SUB_SLOTS, FLEX_PARTY,
   canFill, roleDemand, rosterDemand, startersPerTeam,
+  roleRoom, rolesWithRoom,
   resizeTemplate, templateFits, resizeSubs, subsFit,
 };
