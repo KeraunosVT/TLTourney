@@ -3,7 +3,7 @@
 --
 -- Run in the Supabase SQL editor AFTER 027. Safe to re-run.
 --
--- EGIRL GAP's captain Zaels holds a seat but is not playing this season. That
+-- EGIRL GAP's captain Zael holds a seat but is not playing this season. That
 -- is two separate problems, and this migration is the two columns that fix
 -- them:
 --
@@ -54,14 +54,27 @@ do $$ begin
   end if;
 end $$;
 
--- ── Mark Zaels ──────────────────────────────────────────────────────────────
+-- ── Mark Zael ───────────────────────────────────────────────────────────────
 -- Matched through the signup's player name and the team's, because that is all
--- a migration has — ids are generated. Narrow on purpose: it touches one row of
--- one team of the running season, and if the name does not match it does
--- nothing at all rather than something approximate.
+-- a migration has — ids are generated.
 --
--- CHECK THE QUERY AT THE BOTTOM. A name that does not match is silent here and
--- would surface on draft night as a team that never gets its extra pick.
+-- ── This matched NOTHING the first time it ran ──────────────────────────────
+-- It looked for 'Zaels'; the signup says 'Zael'. The update reported success
+-- and changed no rows, so every 028 check passed except the one counting
+-- non-playing members — and without that row the draft sees four level teams,
+-- awards no compensation pick, and EGIRL GAP quietly fields one fewer.
+--
+-- Two things changed as a result, and both are about being wrong LOUDLY:
+--
+--   · lower(), so a capitalisation difference cannot do this again.
+--   · the `via = 'captain'` guard is gone. Whether somebody plays has nothing
+--     to do with how they reached the roster, and the guard was a third way
+--     for this to silently match nothing. The verify check below is what
+--     catches a bad match now — it asserts exactly one row, so zero fails.
+--
+-- CHECK THE QUERY AT THE BOTTOM after running this. A name that does not match
+-- is silent here and surfaces on draft night as a team that never gets its
+-- extra pick.
 update team_players r
    set playing = false
   from player_signups p, teams t, tournaments o
@@ -70,8 +83,7 @@ update team_players r
    and o.id = r.tournament_id
    and o.status <> 'complete'
    and t.name = 'EGIRL GAP'
-   and p.player_name = 'Zaels'
-   and r.via = 'captain';
+   and lower(p.player_name) = 'zael';
 
 -- Check — who is on a roster without playing. Should be exactly one row:
 --   select t.name as team, p.player_name, r.via

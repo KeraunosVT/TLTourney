@@ -764,7 +764,9 @@ union all
 select '028 · the compensation columns are paired by a constraint',
        exists (select 1 from pg_constraint where conname = 'drafts_comp_pair')
 union all
--- THE ONE TO READ. 028 marks Zaels by TEAM NAME and PLAYER NAME, because a
+-- THE ONE TO READ, and it has already earned its place: 028 first looked for
+-- 'Zaels' when the signup says 'Zael', matched nothing, reported success, and
+-- this row is what caught it. 028 marks by TEAM NAME and PLAYER NAME, because a
 -- migration has no ids — so a rename, a stray space, or the apostrophe in
 -- another team's name makes it match nothing, silently. That surfaces on draft
 -- night as a team that never gets its extra pick.
