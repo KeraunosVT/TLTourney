@@ -573,7 +573,9 @@ function OnClock({ draft, team }) {
   return (
     <div className="flex flex-col gap-[0.3em] min-w-[20em] max-w-[80vw]">
       <div className="flex items-baseline justify-between gap-[1em]">
-        <Eyebrow>{paused ? 'Paused' : 'On the clock'}</Eyebrow>
+        <Eyebrow>
+          {paused ? 'Paused' : draft.isCompensation ? 'Compensation pick' : 'On the clock'}
+        </Eyebrow>
         <span className="mono text-[0.5em] text-ash tabular-nums whitespace-nowrap">
           R{draft.round}/{draft.rounds} · P{draft.currentPick}/{draft.totalPicks}
         </span>

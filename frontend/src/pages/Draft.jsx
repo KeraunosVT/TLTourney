@@ -118,6 +118,11 @@ export default function Draft() {
           <p className="text-ash text-sm mt-1.5">
             {state.tournament?.name}
             {d.rounds > 0 && ` · ${d.rounds} rounds · ${d.totalPicks} picks`}
+            {/* Without this, 257 against four teams and 64 rounds reads as an
+                off-by-one rather than as the rule it is. */}
+            {d.compensation && (
+              <span className="text-dim"> (includes one compensation pick)</span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -260,7 +265,14 @@ function ClockBanner({ draft, you, team, left }) {
       <div className="p-5 flex items-center justify-between gap-6 flex-wrap">
         <div className="min-w-0">
           <div className="eyebrow">
-            Round {draft.round} · Pick {draft.currentPick} of {draft.totalPicks}
+            Round {draft.round}
+            {/* The compensation pick follows a round rather than sitting inside
+                one, so it says so instead of claiming a pickInRound it has
+                not got. */}
+            {draft.isCompensation
+              ? <span className="text-crimsonbright"> · Compensation</span>
+              : null}
+            {' · '}Pick {draft.currentPick} of {draft.totalPicks}
           </div>
           <div className={`font-display mt-1 leading-tight ${yours ? 'text-[34px] text-crimsonbright' : 'text-[26px]'}`}>
             {yours ? "You're on the clock" : `${team?.name || 'Unknown team'} is on the clock`}
@@ -277,6 +289,15 @@ function ClockBanner({ draft, you, team, left }) {
           {!you && (
             <div className="text-[13px] text-ash mt-1">
               You are watching — only a team's captains can pick.
+            </div>
+          )}
+          {/* Said on the pick itself, to everyone, because an extra turn that
+              nobody explains looks like the clock skipping. */}
+          {draft.isCompensation && (
+            <div className="text-[13px] text-crimsonbright mt-1.5 max-w-[70ch] leading-relaxed">
+              An extra pick — {team?.name || 'this team'} has a captain who is not playing,
+              so they draft one more and field the same number of starters as everyone
+              else. The round order resumes straight after it.
             </div>
           )}
         </div>
@@ -520,6 +541,13 @@ function OnDeck({ draft, teams, you }) {
           >
             <span className="mono text-[11px] w-14 shrink-0">R{x.round}·P{x.pick}</span>
             <span className="truncate">{teams[x.teamId]?.name || '—'}</span>
+            {/* A captain planning two picks ahead has to see the extra turn
+                coming, or their arithmetic about who is left is wrong. */}
+            {x.compensation && (
+              <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright shrink-0">
+                comp
+              </span>
+            )}
           </div>
         ))}
       </div>
@@ -813,6 +841,17 @@ function Controls({ admin, draft, teams, pool, onDone, setBanner }) {
                 {humanDuration(plan.worstCaseSeconds)}
               </div>
             </div>
+            {/* Before the click, not after. An organizer pressing start should
+                already know one team is getting an extra turn. */}
+            {plan.compensation && (
+              <p className="text-xs text-ash max-w-[46ch] leading-relaxed">
+                <span className="text-crimsonbright">
+                  {plan.compensation.teamName || 'One team'} gets a compensation pick
+                </span>
+                {' '}at pick {plan.compensation.afterPick + 1}, once every team has its
+                starters — they have a captain who is not playing.
+              </p>
+            )}
             {plan.worstCaseSeconds > 5 * 3600 && (
               <p className="text-xs text-ash max-w-[46ch] leading-relaxed">
                 That is the worst case, not the expectation — but a shorter clock or a smaller

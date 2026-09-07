@@ -849,7 +849,11 @@ async function assembleState(t, d) {
       totalPicks: total(d),
       rounds: d.rounds,
       round: here?.round ?? null,
+      // Null on the compensation pick — it follows a round rather than sitting
+      // inside one. Published as an explicit flag beside it so the page never
+      // has to read "pickInRound is null" as meaning anything.
       pickInRound: here?.pickInRound ?? null,
+      isCompensation: here?.compensation === true,
       deadline: d.pick_deadline,
       // The client counts down from (deadline - serverTime), not from its own
       // clock. A machine ten seconds fast would otherwise show ten seconds

@@ -311,7 +311,12 @@ function OnClock({ draft, team, left }) {
     <Card tone={urgent ? 'urgent' : 'live'}>
       <div className="flex items-start justify-between gap-[2vw]">
         <div className="min-w-0">
-          <div className="text-[1.2vh] uppercase tracking-[0.24em] text-crimsonbright">On the clock</div>
+          <div className="text-[1.2vh] uppercase tracking-[0.24em] text-crimsonbright">
+            On the clock
+            {/* An extra turn that nobody explains reads on a broadcast as the
+                clock having skipped a team. */}
+            {draft.isCompensation && <span className="text-bone"> · compensation pick</span>}
+          </div>
           <div className="font-display text-[5.4vh] leading-[1.05] mt-[0.8vh] truncate">
             {team?.name || 'Unknown team'}
           </div>
