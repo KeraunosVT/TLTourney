@@ -13,6 +13,7 @@ import { Panel, Pill, Button, Field, Note } from '../components/ui';
 import { whenLocal, toLocalInput, fromLocalInput, humanDuration } from '../lib/clock';
 import { roleDemand, startersPerTeam } from '@shared/parties.cjs';
 import { ROLES } from '@shared/roles.cjs';
+import { normalizeStreams, hostOf, MAX_STREAMS, MAX_LABEL, MAX_URL } from '@shared/streams.cjs';
 
 export default function Setup() {
   const [t, setT] = useState(null);
@@ -91,6 +92,9 @@ export default function Setup() {
           <Shape tournament={t} teams={teams} onSave={save} />
           <Demand tournament={t} />
           <Signups tournament={t} onSave={save} />
+          {/* After signups: you set these once the season is about to be
+              watched, which is later than you set its shape. */}
+          <Streams tournament={t} onSave={save} />
         </>
       )}
 
@@ -121,6 +125,100 @@ function Name({ tournament, onSave }) {
         >
           Save
         </Button>
+      </div>
+    </Panel>
+  );
+}
+
+// ── Streams ─────────────────────────────────────────────────────────────────
+// A LIST, because a season is a main broadcast plus co-streams — a second
+// caster, a team's own POV — and one field would mean editing a migration the
+// day somebody adds one.
+//
+// There is always a blank row at the bottom to type into, and blank rows are
+// dropped on save rather than refused: an editor whose "add" button you have to
+// find first is an editor people paste one link into and leave.
+function Streams({ tournament, onSave }) {
+  const asRows = (t) => [...(t.streams || []), { label: '', url: '' }];
+  const [rows, setRows] = useState(() => asRows(tournament));
+  const [error, setError] = useState(null);
+
+  useEffect(() => { setRows(asRows(tournament)); }, [tournament.streams]);
+
+  function edit(i, field, value) {
+    setError(null);
+    setRows((prev) => {
+      const next = prev.map((r, n) => (n === i ? { ...r, [field]: value } : r));
+      // Typing in the last row grows a new blank one under it.
+      const last = next[next.length - 1];
+      if (last.label.trim() || last.url.trim()) next.push({ label: '', url: '' });
+      return next;
+    });
+  }
+
+  const remove = (i) => { setError(null); setRows((prev) => prev.filter((_, n) => n !== i)); };
+
+  function save() {
+    // Validated here with the SAME function the server uses, so a bad link is
+    // caught under the field that caused it rather than as a banner after a
+    // round trip.
+    const { streams, error: bad } = normalizeStreams(rows);
+    if (bad) return setError(bad);
+    onSave({ streams }, streams.length ? 'Streams saved.' : 'Streams cleared.');
+  }
+
+  const saved = tournament.streams || [];
+  const changed = JSON.stringify(normalizeStreams(rows).streams || []) !== JSON.stringify(saved);
+
+  return (
+    <Panel
+      title="Streams"
+      subtitle="Where the season is being broadcast. Public — anyone can see these, signed in or not."
+    >
+      <div className="p-4 flex flex-col gap-2.5">
+        {rows.map((r, i) => {
+          const host = r.url ? hostOf(r.url) : '';
+          return (
+            <div key={i} className="flex items-center gap-2 flex-wrap">
+              <input
+                className="field-input py-1.5 text-[13px] w-[190px]"
+                value={r.label}
+                maxLength={MAX_LABEL}
+                placeholder="Main broadcast"
+                onChange={(e) => edit(i, 'label', e.target.value)}
+                aria-label={`Stream ${i + 1} name`}
+              />
+              <input
+                className="field-input py-1.5 text-[13px] flex-1 min-w-[260px]"
+                value={r.url}
+                maxLength={MAX_URL}
+                placeholder="https://twitch.tv/…"
+                onChange={(e) => edit(i, 'url', e.target.value)}
+                aria-label={`Stream ${i + 1} link`}
+              />
+              {/* The host, so an organizer can see at a glance that a pasted
+                  link goes where they think it does. */}
+              <span className="mono text-[11px] text-ash w-[92px] truncate">{host}</span>
+              <button
+                onClick={() => remove(i)}
+                disabled={rows.length === 1}
+                className="text-[11px] text-ash hover:text-crimsonbright underline underline-offset-2
+                           disabled:opacity-30"
+              >
+                remove
+              </button>
+            </div>
+          );
+        })}
+
+        {error && <p className="field-error">{error}</p>}
+
+        <div className="flex items-center gap-3 mt-1">
+          <Button variant="primary" disabled={!changed} onClick={save}>Save streams</Button>
+          <span className="text-xs text-ash">
+            Up to {MAX_STREAMS}. Links must start with <span className="mono">https://</span>.
+          </span>
+        </div>
       </div>
     </Panel>
   );

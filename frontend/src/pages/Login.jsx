@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import api from '../api';
 import { LockupVertical } from '../components/Brand';
+import { hostOf } from '@shared/streams.cjs';
 
 // The tournament Discord. Signing in checks membership of this server, so
 // somebody who hasn't joined it is refused before they get anywhere — which is
@@ -150,6 +151,33 @@ export default function Login() {
             </p>
           )}
         </div>
+
+        {/* Watching needs no account, so this sits OUTSIDE the sign-in panel
+            rather than inside the two-step. Somebody who followed a link to
+            find the stream should not have to read a Discord invite first. */}
+        {tournament?.streams?.length > 0 && (
+          <div className="mt-6">
+            <div className="eyebrow text-center mb-2.5">Watch</div>
+            <div className="flex flex-col gap-1.5">
+              {tournament.streams.map((s) => (
+                <a
+                  key={s.url}
+                  href={s.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="flex items-center gap-2.5 px-3.5 py-2.5 rounded border border-line
+                             hover:border-crimson hover:text-crimsonbright transition-colors"
+                >
+                  <span className="text-[13px] truncate">{s.label}</span>
+                  <span className="flex-1" />
+                  {/* The host, shown because these are links an organizer
+                      typed and a viewer is about to leave the site for. */}
+                  <span className="mono text-[10.5px] text-ash truncate">{hostOf(s.url)} ↗</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
 
         <p className="text-[11px] text-ash text-center mt-5 leading-relaxed">
           This is the tournament's own Discord server, separate from any guild you're in.

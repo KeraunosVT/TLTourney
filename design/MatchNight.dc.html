@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus&family=Noto+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body {
+      margin: 0;
+      background-color: #0B0A0C;
+      background-image:
+        radial-gradient(ellipse 90% 55% at 50% 0%, rgba(163,18,25,0.10), transparent 60%),
+        radial-gradient(ellipse 120% 60% at 50% 100%, rgba(90,10,16,0.07), transparent 62%);
+      color: #D8D0C4;
+      font-family: 'Noto Sans', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: #C9232B; text-decoration: none; }
+    a:hover { color: #D8D0C4; }
+    .display { font-family: 'Marcellus', Georgia, serif; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    .eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: 0.18em; font-weight: 600; color: #8E8880; }
+  </style>
+</helmet>
+
+<div style="width: 1440px; min-height: 1440px; display: flex; flex-direction: column;">
+
+  <!-- Nav -->
+  <div style="display: flex; align-items: center; gap: 14px; padding: 0 56px; height: 68px; border-bottom: 1px solid #343032;">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 760" width="34" height="34"><circle cx="380" cy="380" r="352" fill="#0B0A0C"/><circle cx="380" cy="380" r="339.9" fill="none" stroke="#A31219" stroke-width="19.8"/><path d="M291.82 598.26 A235.40 235.40 0 0 1 291.82 161.74" fill="none" stroke="#A31219" stroke-width="33" stroke-linecap="round"/><path d="M468.18 598.26 A235.40 235.40 0 0 0 468.18 161.74" fill="none" stroke="#A31219" stroke-width="33" stroke-linecap="round"/><g transform="translate(380 380) scale(1.2) translate(-380 -380)"><polygon points="380,134.7 402,197.4 402,452.6 380,452.6" fill="#8E8880"/><polygon points="380,134.7 358,197.4 358,452.6 380,452.6" fill="#D8D0C4"/><polygon points="380,134.7 402,197.4 402,452.6 358,452.6 358,197.4" fill="none" stroke="#5E5952" stroke-width="4.84" stroke-linejoin="round"/><polygon points="375.6,215 384.4,215 384.4,430.6 375.6,430.6" fill="#5E5952"/><path d="M285.40 483.40L314.00 454.80L446.00 454.80L474.60 483.40L448.20 492.20L311.80 492.20Z" fill="#A31219" stroke="#5A0A10" stroke-width="4.84" stroke-linejoin="round"/><polygon points="362.4,492.2 397.6,492.2 400.9,551.6 359.1,551.6" fill="#0B0A0C" stroke="#A31219" stroke-width="4.84"/><line x1="363.5" y1="501" x2="396.5" y2="509.8" stroke="#D8D0C4" stroke-width="4.84"/><line x1="363.5" y1="516.4" x2="396.5" y2="525.2" stroke="#D8D0C4" stroke-width="4.84"/><line x1="363.5" y1="531.8" x2="396.5" y2="540.6" stroke="#D8D0C4" stroke-width="4.84"/><polygon points="380,551.6 404.2,575.8 380,600 355.8,575.8" fill="#A31219" stroke="#5A0A10" stroke-width="4.84"/><circle cx="380" cy="575.8" r="7.15" fill="#D8D0C4"/></g></svg>
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <div class="display" style="font-size: 15px; letter-spacing: 0.02em; line-height: 1;">THRONE <span style="color: #A31219;">&amp;</span> LIBERTY</div>
+      <div class="eyebrow" style="line-height: 1;">Tournament Series</div>
+    </div>
+    <div style="flex-grow: 1;"></div>
+    <div style="display: flex; align-items: center; gap: 26px;">
+      <a href="#" style="font-size: 13px; color: #8E8880;">Bracket</a>
+      <a href="#" style="font-size: 13px; color: #8E8880;">Predictions</a>
+      <a href="#" style="font-size: 13px; color: #8E8880;">Leaderboard</a>
+      <a href="#" style="display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 18px; border: 1px solid #343032; color: #8E8880; border-radius: 4px; font-size: 12px; font-weight: 600;">Sign in</a>
+    </div>
+  </div>
+
+  <!-- Next match hero -->
+  <div style="padding: 46px 56px 0 56px;">
+    <div style="display: inline-flex; align-items: center; gap: 9px; padding: 7px 14px; border: 1px solid #343032; background: #201E21; border-radius: 999px;">
+      <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; font-weight: 600; color: #8E8880;">Playoffs &middot; Winners round 2</span>
+    </div>
+
+    <div style="display: flex; gap: 24px; margin-top: 22px; align-items: stretch;">
+
+      <div style="flex-grow: 1; background: #161517; border: 1px solid #343032; border-radius: 6px; padding: 32px 34px; display: flex; flex-direction: column; gap: 26px;">
+        <div style="display: flex; align-items: center; gap: 28px;">
+          <div style="flex-grow: 1; flex-basis: 0; min-width: 0; display: flex; flex-direction: column; gap: 7px; align-items: flex-end; text-align: right;">
+            <span class="mono" style="font-size: 12px; color: #5E5952;">seed 1</span>
+            <span class="display" style="font-size: 40px; line-height: 1.05;">Iron Vow</span>
+            <span style="font-size: 12.5px; color: #8E8880;">4 &ndash; 0 in the group</span>
+          </div>
+          <div style="flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 6px;">
+            <span class="display" style="font-size: 26px; color: #5E5952;">vs</span>
+            <span class="eyebrow">best of 3</span>
+          </div>
+          <div style="flex-grow: 1; flex-basis: 0; min-width: 0; display: flex; flex-direction: column; gap: 7px;">
+            <span class="mono" style="font-size: 12px; color: #5E5952;">seed 4</span>
+            <span class="display" style="font-size: 40px; line-height: 1.05;">Ashen Pact</span>
+            <span style="font-size: 12.5px; color: #8E8880;">3 &ndash; 1 in the group</span>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: center; gap: 14px; padding: 16px 0; border-top: 1px solid rgba(52,48,50,0.6); border-bottom: 1px solid rgba(52,48,50,0.6);">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#8E8880" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <span style="font-size: 15px; color: #D8D0C4;">[DAY], [DATE] &middot; 8:00 PM ET</span>
+          <span class="mono" style="font-size: 15px; color: #C9232B;">in 2h 14m</span>
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: center; gap: 14px;">
+          <a href="#" style="display: inline-flex; align-items: center; justify-content: center; gap: 9px; height: 52px; padding: 0 28px; border: 1px solid rgba(163,18,25,0.6); background: rgba(163,18,25,0.15); color: #C9232B; border-radius: 4px; font-size: 14px; font-weight: 700;">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5v13l12-6.5z"/><path d="M20 5v14"/></svg>
+            Watch live
+          </a>
+          <a href="#" style="display: inline-flex; align-items: center; justify-content: center; height: 52px; padding: 0 24px; border: 1px solid rgba(108,150,116,0.55); background: rgba(108,150,116,0.12); color: #6C9674; border-radius: 4px; font-size: 14px; font-weight: 700;">
+            Make your pick
+          </a>
+        </div>
+      </div>
+
+      <!-- How the room called it -->
+      <div style="width: 372px; flex-shrink: 0; background: #161517; border: 1px solid #343032; border-radius: 6px; display: flex; flex-direction: column;">
+        <div style="padding: 14px 18px; border-bottom: 1px solid #343032; display: flex; align-items: baseline; justify-content: space-between;">
+          <span class="display" style="font-size: 15px; letter-spacing: 0.03em;">How the room called it</span>
+        </div>
+        <div style="padding: 20px 18px; display: flex; flex-direction: column; gap: 16px;">
+          <div style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: #201E21;">
+            <div style="width: 68%; background: #A31219;"></div>
+            <div style="width: 32%; background: rgba(216,208,196,0.45);"></div>
+          </div>
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 14px;">
+            <span style="font-size: 13px;"><span class="mono" style="color: #C9232B;">68%</span> <span style="color: #8E8880;">IRV</span></span>
+            <span style="font-size: 13px;"><span style="color: #8E8880;">ASH</span> <span class="mono">32%</span></span>
+          </div>
+          <div style="font-size: 12px; color: #5E5952; padding-top: 14px; border-top: 1px solid rgba(52,48,50,0.6);">
+            412 picks in. Locks when the first game starts.
+          </div>
+        </div>
+        <div style="flex-grow: 1;"></div>
+        <div style="padding: 16px 18px; border-top: 1px solid #343032; display: flex; flex-direction: column; gap: 9px;">
+          <div class="eyebrow">Maps banned</div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+            <span style="font-size: 12px; color: #C9232B; text-decoration: line-through;">Talus</span>
+            <span style="font-size: 12px; color: #C9232B; text-decoration: line-through;">Daigon</span>
+            <span style="font-size: 12px; color: #C9232B; text-decoration: line-through;">Adentus</span>
+            <span style="font-size: 12px; color: #C9232B; text-decoration: line-through;">Kowazan</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Standings strip -->
+  <div style="padding: 44px 56px 0 56px;">
+    <div style="display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px;">
+      <span class="eyebrow">Still standing</span>
+      <span style="font-size: 12px; color: #5E5952;">double elimination &mdash; lose twice and you are out</span>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px;">
+
+      <div style="background: #161517; border: 1px solid #343032; border-radius: 6px; padding: 18px 20px; display: flex; align-items: baseline; gap: 11px;">
+        <span class="mono" style="font-size: 11px; color: #5E5952;">1</span>
+        <span class="display" style="font-size: 18px;">Iron Vow</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: #6C9674; font-weight: 700;">winners</span>
+      </div>
+
+      <div style="background: #161517; border: 1px solid #343032; border-radius: 6px; padding: 18px 20px; display: flex; align-items: baseline; gap: 11px;">
+        <span class="mono" style="font-size: 11px; color: #5E5952;">4</span>
+        <span class="display" style="font-size: 18px;">Ashen Pact</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: #6C9674; font-weight: 700;">winners</span>
+      </div>
+
+      <div style="background: #161517; border: 1px solid #343032; border-radius: 6px; padding: 18px 20px; display: flex; align-items: baseline; gap: 11px;">
+        <span class="mono" style="font-size: 11px; color: #5E5952;">2</span>
+        <span class="display" style="font-size: 18px; color: #8E8880;">Bravewater</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: #8E8880; font-weight: 700;">losers</span>
+      </div>
+
+      <div style="background: #161517; border: 1px solid #343032; border-radius: 6px; padding: 18px 20px; display: flex; align-items: baseline; gap: 11px; opacity: 0.55;">
+        <span class="mono" style="font-size: 11px; color: #5E5952;">3</span>
+        <span class="display" style="font-size: 18px; color: #8E8880; text-decoration: line-through;">Hollowden</span>
+        <div style="flex-grow: 1;"></div>
+        <span style="font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: #5E5952; font-weight: 700;">out</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Secondary -->
+  <div style="padding: 52px 56px 0 56px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px;">
+    <div style="background: #161517; border: 1px solid #343032; border-radius: 6px; padding: 24px; display: flex; flex-direction: column; gap: 11px;">
+      <div class="display" style="font-size: 19px;">The full bracket</div>
+      <p style="margin: 0; font-size: 13.5px; line-height: 1.65; color: #8E8880;">
+        Every series, every map, every scoreboard &mdash; back to the first game of the
+        group stage.
+      </p>
+    </div>
+    <div style="background: #161517; border: 1px solid #343032; border-radius: 6px; padding: 24px; display: flex; flex-direction: column; gap: 11px;">
+      <div class="display" style="font-size: 19px;">Leaderboard</div>
+      <p style="margin: 0; font-size: 13.5px; line-height: 1.65; color: #8E8880;">
+        Who has called the season best. Points for every series picked and every
+        organiser&rsquo;s question answered.
+      </p>
+    </div>
+  </div>
+
+  <div style="flex-grow: 1;"></div>
+
+  <div style="margin-top: 64px; padding: 26px 56px; border-top: 1px solid #343032; display: flex; align-items: center; gap: 24px;">
+    <span style="font-size: 12px; color: #5E5952;">Run on Discord. Sign in with the account you play on.</span>
+    <div style="flex-grow: 1;"></div>
+    <a href="#" style="font-size: 12px; color: #8E8880;">Watch the stream</a>
+    <a href="#" style="font-size: 12px; color: #8E8880;">Rules</a>
+    <a href="#" style="font-size: 12px; color: #8E8880;">Discord</a>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

@@ -37,6 +37,16 @@ export default function Bracket() {
 
   useEffect(() => { load(); }, [load]);
 
+  // The broadcast links, fetched once and separately. Not folded into the
+  // bracket read: they change about twice a season while this page reloads on
+  // every result, and a failure to reach them must not take the bracket down.
+  const [streams, setStreams] = useState([]);
+  useEffect(() => {
+    api.get('/api/tournament')
+      .then(({ data }) => setStreams(data.tournament?.streams || []))
+      .catch(() => {});
+  }, []);
+
   async function record(key, winnerId) {
     setBusy(true);
     setBanner(null);
@@ -84,14 +94,37 @@ export default function Bracket() {
             twice if the losers-bracket team wins the first one.
           </p>
         </div>
-        {state?.exists && (
-          <div className="flex items-center gap-2">
-            <Pill tone="quiet">
-              {state.counts.complete} of {state.counts.total} played
-            </Pill>
-            {state.counts.ready > 0 && <Pill tone="crimson" blip>{state.counts.ready} ready</Pill>}
-          </div>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Where to watch, on the page people are looking at while a series
+              is being played. Absent entirely when no stream is set — an empty
+              "Watch" heading is worse than no heading. */}
+          {streams.map((s) => (
+            <a
+              key={s.url}
+              href={s.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded border border-crimson/55
+                         bg-crimson/12 text-crimsonbright text-xs font-semibold
+                         hover:bg-crimson/22 transition-colors"
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+                   strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 5.5v13l12-6.5z" />
+                <path d="M20 5v14" />
+              </svg>
+              {s.label}
+            </a>
+          ))}
+          {state?.exists && (
+            <>
+              <Pill tone="quiet">
+                {state.counts.complete} of {state.counts.total} played
+              </Pill>
+              {state.counts.ready > 0 && <Pill tone="crimson" blip>{state.counts.ready} ready</Pill>}
+            </>
+          )}
+        </div>
       </header>
 
       {banner && <div className="mb-4 max-w-[900px]"><Note tone={banner.tone}>{banner.text}</Note></div>}

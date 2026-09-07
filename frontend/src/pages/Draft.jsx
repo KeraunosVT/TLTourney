@@ -15,6 +15,7 @@ import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Empty, Note, Field } from '../components/ui';
 import { useAuth } from '../auth';
 import { useCountdown, mmss, humanDuration } from '../lib/clock';
+import { pollMs } from '../lib/stream';
 import { ROLES, POSITIONS } from '@shared/roles.cjs';
 
 export default function Draft() {
@@ -52,10 +53,15 @@ export default function Draft() {
   // Polls rather than streams. See the note at the top of backend/draft.js: the
   // countdown is computed locally from a deadline, so the only thing that has
   // to arrive promptly is a pick every minute or two.
+  //
+  // Cadence comes from pollMs, shared with the stream view. A draft that has
+  // not started polls once a minute rather than every ten seconds: this is the
+  // page a captain leaves open in a background tab for the weeks between the
+  // roster being set and the draft actually running, and each poll costs a
+  // full read of every roster in the tournament.
   const status = state?.draft?.status;
   useEffect(() => {
-    const ms = status === 'live' ? 2000 : 10000;
-    const id = setInterval(load, ms);
+    const id = setInterval(load, pollMs(status));
     return () => clearInterval(id);
   }, [status, load]);
 

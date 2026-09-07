@@ -8,6 +8,7 @@ const { sendDM, listRoles, fetchMember, botConfigured } = require('./discord');
 const {
   resizeTemplate, templateFits, resizeSubs, subsFit, SLOT_NAMES,
 } = require('../shared/parties.cjs');
+const { normalizeStreams } = require('../shared/streams.cjs');
 
 const router = express.Router();
 
@@ -253,6 +254,16 @@ router.put('/tournament', async (req, res) => {
       name: String(p.name || 'Party').slice(0, 40),
       slots: p.slots,
     }));
+  }
+
+  // Where the season is being broadcast. Validated through the SAME function
+  // the Setup form calls, so the form cannot offer something this refuses —
+  // and refused rather than sanitised, because silently dropping a link an
+  // organizer pasted is how a stream goes unlisted on the night.
+  if (req.body?.streams !== undefined) {
+    const { streams, error } = normalizeStreams(req.body.streams);
+    if (error) return res.status(400).json({ error });
+    patch.streams = streams;
   }
 
   // An explicit bench, if one was sent. Same validation as a party's slots and

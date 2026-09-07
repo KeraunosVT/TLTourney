@@ -1,0 +1,32 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 1440, "h": 1460, "title": "Signups open" },
+    { "file": "DraftLive.dc.html", "x": 1560, "y": 0, "w": 1440, "h": 1460, "title": "Draft night" },
+    { "file": "MatchNight.dc.html", "x": 3120, "y": 0, "w": 1440, "h": 1460, "title": "Match night" },
+    { "file": "Mobile.dc.html", "x": 4680, "y": 0, "w": 390, "h": 1580, "title": "Signups — phone" }
+  ],
+  "annotations": [
+    {
+      "id": "the-idea",
+      "x": 0,
+      "y": -240,
+      "w": 620,
+      "text": "The landing page IS the tournament's state.\n\nOne page, one primary action, and both change with tournaments.status — setup / signups / draft / live / complete. A visitor never has to work out what phase the season is in; the hero tells them and hands them the one thing worth doing right now.\n\nThe three desktop boards are the same page in three states, not three pages."
+    },
+    {
+      "id": "live-data",
+      "x": 1560,
+      "y": -240,
+      "w": 620,
+      "text": "Every number here is already public.\n\n/api/stream/draft and /api/stream/bracket sit OUTSIDE the auth gate — they're what /watch and /lower read. So a logged-out visitor can see the live clock, the on-the-clock team and the pick feed with no new backend work.\n\nThe pool counts come from readiness, which is organizer-only today and would need a public, count-only version."
+    },
+    {
+      "id": "phone-note",
+      "x": 4680,
+      "y": -240,
+      "w": 500,
+      "text": "Phone matters more than usual here.\n\nindex.html already notes that Discord is where every one of these links gets posted — so most first visits are a tap from a Discord message on a phone.\n\nFull-length board, not a 844px crop: this is the whole scroll."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}

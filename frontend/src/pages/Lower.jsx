@@ -35,6 +35,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { useCountdown, countdownLabel, mmss, whenShort } from '../lib/clock';
+import { pollMs } from '../lib/stream';
 import { big } from './Match';
 
 // Every card this page knows how to draw. They cycle in the order the URL asks
@@ -134,13 +135,24 @@ export default function Lower() {
     !demo && feeds.has('bracket'),
   );
 
-  // Two, because the pick clock IS the point of these cards. At five the
-  // on-clock team would stay wrong for up to five seconds after a pick lands,
-  // which is precisely the moment everybody is looking at it. The digits
-  // themselves tick locally between polls — it is WHOSE name is under them that
-  // needs the faster feed. No ?pool=1: the strip never draws the available
-  // list, and asking for it would add a hundred and fifty names to every poll.
-  const liveDraft = usePoll('/api/stream/draft', 2000, !demo && feeds.has('draft'));
+  // Two seconds WHILE THE DRAFT IS LIVE, because the pick clock is the point
+  // of these cards: at five the on-clock team would stay wrong for up to five
+  // seconds after a pick lands, which is precisely when everybody is looking.
+  // The digits tick locally between polls — it is whose name sits under them
+  // that needs the faster feed.
+  //
+  // Once a minute otherwise, which is the state this source spends most of its
+  // life in: an overlay is added to OBS the afternoon before and left there.
+  // Neither of these cards draws anything at all unless the draft is live or
+  // paused, so a fast poll before it starts buys a blank strip.
+  //
+  // Still no ?pool=1 — the strip never draws the available list. That now
+  // saves the read as well as the bytes; see fullPool in backend/draft.js.
+  const [draftStatus, setDraftStatus] = useState(null);
+  const liveDraft = usePoll('/api/stream/draft', pollMs(draftStatus), !demo && feeds.has('draft'));
+  useEffect(() => {
+    setDraftStatus(liveDraft?.draft?.status ?? null);
+  }, [liveDraft?.draft?.status]);
 
   const data = demo ? DEMO : liveBracket;
   const draftData = demo ? DEMO_DRAFT : liveDraft;

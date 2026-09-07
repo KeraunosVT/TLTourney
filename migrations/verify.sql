@@ -596,4 +596,16 @@ select '022 · every seating points at a seat the template still has',
            join tournaments o on o.id = t.tournament_id
           where s.party_index >= jsonb_array_length(o.party_template)
              or s.slot_index >= jsonb_array_length(
-                  o.party_template->s.party_index->'slots'));
+                  o.party_template->s.party_index->'slots'))
+union all
+-- ── 023 ────────────────────────────────────────────────────────────────────
+select '023 · tournaments.streams exists and is an array',
+       exists (select 1 from pg_constraint where conname = 'tournaments_streams_is_array')
+union all
+-- THE one that matters. These links are served by /api/tournament, which sits
+-- above requireAuth, and rendered as anchors to the public — so anything but
+-- https in here is a live `javascript:` href waiting to be clicked. The API
+-- refuses them (shared/streams.cjs); this proves nothing got in another way.
+select '023 · every stream link is https',
+       not exists (select 1 from tournaments, jsonb_array_elements(streams) s
+                    where s->>'url' is null or s->>'url' not like 'https://%');

@@ -61,6 +61,15 @@ const MAX_AUTO_PER_PASS = 5;
 // here goes out unredacted. `casting` and `feedPlayer` below name the fields
 // that may leave the building; anything not in them stops at a session.
 const PLAYER = 'id, player_name, discord_username, role, classes, positions, nights, notes, wants_shotcall';
+
+// The same rows, for the questions that are only ever COUNTS: how many are
+// left, and how many of each role. That is everything the snapshot itself asks
+// of the pool — `poolCount`, `scarcity`, and the version string — and it is
+// what the stream view shows unless a caller explicitly asks for the list.
+//
+// `id` is not decoration: the pool is filtered against the rostered set, so
+// counting requires knowing WHICH rows, not how many.
+const POOL_COUNTS = 'id, role';
 const TEAM = 'id, name, tag, seed';
 
 const ordinal = (n) => {
@@ -772,6 +781,9 @@ const snapshots = new Map();
 
 function invalidate(tournamentId) {
   snapshots.delete(tournamentId);
+  // Both, always. A pick changes who is available, and a stale full pool would
+  // offer a captain somebody who was taken a second ago.
+  pools.delete(tournamentId);
 }
 
 async function snapshot(t, d) {
@@ -782,9 +794,8 @@ async function snapshot(t, d) {
     const [assembled, taken, poolRes] = await Promise.all([
       assembleState(t, d),
       rosteredIds(t.id),
-      supabase.from('player_signups').select(PLAYER)
-        .eq('tournament_id', t.id).eq('status', 'approved')
-        .order('player_name', { ascending: true }),
+      supabase.from('player_signups').select(POOL_COUNTS)
+        .eq('tournament_id', t.id).eq('status', 'approved'),
     ]);
     if (poolRes.error) throw new Error(`draft pool read failed: ${poolRes.error.message}`);
     return {
@@ -794,6 +805,8 @@ async function snapshot(t, d) {
       // captain their own without a second round trip on every poll.
       rosters: assembled.rosters,
       taken,
+      // Two columns a player, not nine — see POOL_COUNTS. Everything the
+      // snapshot itself answers about the pool is a COUNT.
       pool: (poolRes.data || []).filter((p) => !taken.has(p.id)),
     };
   })();
@@ -801,6 +814,45 @@ async function snapshot(t, d) {
   snapshots.set(t.id, { at: Date.now(), job });
   return job;
 }
+
+/**
+ * The available players in full — names, classes, notes, the lot.
+ *
+ * Split out of the snapshot, and that split is the point. This is ~150 rows of
+ * nine columns including free text, and it used to be read on EVERY snapshot
+ * whether or not one caller wanted it: the `?pool=1` / `have=` negotiation
+ * below suppressed SENDING the list and did nothing about reading it.
+ *
+ * That made it the wrong kind of cost. A tab left open on /draft polls every
+ * ten seconds whatever the draft is doing, so this ran all season rather than
+ * on draft night — the bill scaled with whether a browser was open, not with
+ * how many people were watching.
+ *
+ * Cached like the snapshot, for the same reason: the callers that need it
+ * arrive together. Cleared with it in `invalidate`.
+ */
+const pools = new Map();
+
+async function fullPool(t) {
+  const hit = pools.get(t.id);
+  if (hit && Date.now() - hit.at < SNAPSHOT_MS) return hit.job;
+
+  const job = (async () => {
+    const { data, error } = await supabase.from('player_signups').select(PLAYER)
+      .eq('tournament_id', t.id).eq('status', 'approved')
+      .order('player_name', { ascending: true });
+    if (error) throw new Error(`draft pool read failed: ${error.message}`);
+    return data || [];
+  })();
+
+  pools.set(t.id, { at: Date.now(), job });
+  return job;
+}
+
+// Cached unfiltered, filtered here: `taken` moves on every pick while the set
+// of approved signups does not, and caching the filtered list would tie this
+// cache's life to the faster-moving of the two.
+const availableFrom = (rows, taken) => rows.filter((p) => !taken.has(p.id));
 
 /**
  * Stamp the moment of sending onto a snapshot that may be up to a second old.
@@ -841,7 +893,7 @@ publicRouter.get('/', async (req, res) => {
     const d = await liveDraft(t);
     if (!d) return res.json({ tournament: null, draft: null, teams: [], picks: [] });
 
-    const { state, pool } = await snapshot(t, d);
+    const { state, taken, pool } = await snapshot(t, d);
 
     // How many are left of each role, against how many the teams still have to
     // find. Three numbers, so everybody gets them.
@@ -872,12 +924,22 @@ publicRouter.get('/', async (req, res) => {
     const wantsPool = req.query.pool === '1' || req.query.pool === 'true';
     const held = String(req.query.have || '');
 
+    // And the full list is now READ under the same condition it is SENT.
+    // Previously this test governed the response only, while every poll read
+    // all nine columns out of Postgres regardless — including the two thirds
+    // of callers (/lower, /draft, a /watch with the rail hidden) that never
+    // display a pool at all. A caller that already holds this version skips
+    // the read too, which is the common case once a page has loaded.
+    const sending = wantsPool && held !== poolVersion
+      ? availableFrom(await fullPool(t), taken).map(casting)
+      : null;
+
     res.json({
       ...stamped(state),
       poolCount: pool.length,
       poolVersion,
       scarcity,
-      ...(wantsPool && held !== poolVersion && { pool: pool.map(casting) }),
+      ...(sending && { pool: sending }),
     });
   } catch (err) {
     readFailure(res, err, 'public draft read');
@@ -896,7 +958,7 @@ router.get('/', async (req, res) => {
     const d = await liveDraft(t);
     if (!d) return res.json({ tournament: null, draft: null, teams: [], picks: [] });
 
-    const [{ state, taken, pool, rosters }, seatsHeld] = await Promise.all([
+    const [{ state, taken, rosters }, seatsHeld] = await Promise.all([
       snapshot(t, d),
       // NOT cached, and deliberately: captaincy is the permission this page's
       // pick button hangs off, and a captain swapped a minute ago must lose it
@@ -953,12 +1015,18 @@ router.get('/', async (req, res) => {
     // no business reading a hundred and fifty people's notes.
     const privileged = !!mine || req.user?.isOrganizer;
 
+    // This page RENDERS the pool — it is the list a captain drafts from — so
+    // the full read is earned here in a way it is not on the stream route.
+    // Fetched after the snapshot rather than inside it so that the callers
+    // which never show a pool no longer pay for one.
+    const available = availableFrom(await fullPool(t), taken);
+
     res.json({
       ...stamped(state),
       you,
       board,
-      pool: privileged ? pool : pool.map(casting),
-      poolCount: pool.length,
+      pool: privileged ? available : available.map(casting),
+      poolCount: available.length,
       // So the page knows whether it is showing everything, rather than
       // guessing from whether a field happens to be populated.
       full: privileged,

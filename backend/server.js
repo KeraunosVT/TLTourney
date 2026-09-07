@@ -78,6 +78,11 @@ app.get('/api/tournament', async (req, res) => {
       sub_count: t.sub_count,
       signups_close_at: t.signups_close_at,
       open: t.status === 'signups',
+      // Public on purpose, and this is the route that should carry them: a
+      // broadcast link is the one piece of tournament data whose whole job is
+      // to be handed to people who have not signed in. This endpoint already
+      // sits above requireAuth.
+      streams: Array.isArray(t.streams) ? t.streams : [],
     },
   });
 });

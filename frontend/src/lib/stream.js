@@ -7,6 +7,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 
 /**
+ * How often to ask, given what the draft is doing. Exported because /draft
+ * polls the authed route on the same rule and a second copy of these numbers
+ * is a second thing to forget.
+ *
+ * The server collapses concurrent callers into one database read every 1.2s,
+ * so this does NOT scale with how many people are watching — it scales with
+ * whether a browser is open at all. Which is why the idle numbers are the ones
+ * that matter: a draft runs for an evening, a forgotten tab runs for a month.
+ */
+export const pollMs = (status) => {
+  if (status === 'live') return 2000;
+  if (status === 'paused') return 10000;
+  return 60000;
+};
+
+/**
  * Poll the draft. Returns { state, failed, reload }.
  *
  * When `wantPool` is true, `state.pool` is the list of available players —
@@ -74,9 +90,24 @@ export function useStreamDraft(wantPool = false) {
   // Asking for the pool for the first time should not wait for the next tick.
   useEffect(() => { if (wantPool) load(); }, [wantPool, load]);
 
+  // How often to ask, by what the draft is actually doing.
+  //
+  // 'live' is the only state where two seconds earns anything: a pick lands
+  // every minute or two and the page should show it promptly. Paused is nearly
+  // as urgent — it can resume at any moment — but nothing changes while it
+  // sits there, so ten seconds is enough to catch the resume.
+  //
+  // PENDING AND COMPLETE POLL SLOWLY, and that is the change that matters for
+  // the bill rather than the page. Neither can change without an organizer
+  // pressing something, and this page is left open for weeks between drafts —
+  // on /watch it is left open on a spare monitor indefinitely. At ten seconds
+  // that was six server round trips a minute, each one a fresh read of every
+  // roster in the tournament, to re-render a screen that says the draft has
+  // not started. A minute still notices a draft starting well inside the time
+  // it takes to read the first pick out loud.
   const status = state?.draft?.status;
   useEffect(() => {
-    const id = setInterval(load, status === 'live' ? 2000 : 10000);
+    const id = setInterval(load, pollMs(status));
     return () => clearInterval(id);
   }, [status, load]);
 
