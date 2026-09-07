@@ -227,12 +227,20 @@ export default function Match() {
           {m.scoreboard_at
             ? <Pill tone="quiet">scoreboard saved</Pill>
             : <Pill tone="crimson">no scoreboard</Pill>}
+          {/* Flagged, never blocking — a result can always be recorded. */}
+          {m.team_a_id && m.team_b_id && !(m.weapons?.a && m.weapons?.b) && (
+            <Pill tone="bad">
+              {!m.weapons?.a && !m.weapons?.b ? 'no weapons' : 'weapons: 1 of 2'}
+            </Pill>
+          )}
         </div>
       </header>
 
       {banner && <div className="mb-4 max-w-[900px]"><Note tone={banner.tone}>{banner.text}</Note></div>}
 
       {canEdit && <Schedule match={m} onSave={saveSchedule} />}
+
+      <Weapons match={m} canEdit={canEdit} onDone={load} setBanner={setBanner} />
 
       <Bans match={m} available={data.mapsAvailable || []} canEdit={canEdit} onSave={saveBans} />
 
@@ -887,6 +895,140 @@ function Bans({ match, available, canEdit, onSave }) {
 // Most matches have no time and should not. A losers-bracket round 4 fixture
 // has no date until the teams in it exist, and a blank field is the honest
 // representation of that.
+// ── Weapons ─────────────────────────────────────────────────────────────────
+// One screenshot per team, taken before the game, kept afterwards. It is the
+// record of what a team actually brought — the thing a dispute about a comp has
+// to look at when memory is the only alternative.
+//
+// Organizers only: captains send these however they already do, and an organizer
+// attaches them. So there is no permission logic here beyond canEdit; the route
+// sits behind requireOrganizer.
+//
+// Never blocks anything. A missing screenshot is a marker on the card and a
+// count on the bracket, and a result can always be recorded — the alternative
+// is refusing to enter a result at 1am because one screenshot never arrived.
+function Weapons({ match, canEdit, onDone, setBanner }) {
+  const [busy, setBusy] = useState(null);
+  const sides = [
+    { slot: 'a', team: match.team_a, id: match.team_a_id, shot: match.weapons?.a },
+    { slot: 'b', team: match.team_b, id: match.team_b_id, shot: match.weapons?.b },
+  ].filter((x) => x.id);
+
+  if (sides.length === 0) return null;
+
+  async function upload(teamId, file) {
+    if (!file) return;
+    setBusy(teamId);
+    setBanner(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('team_id', teamId);
+      await api.post(`/api/organizer/bracket/weapons/${encodeURIComponent(match.key)}`, form);
+      await onDone();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove(teamId, teamName) {
+    if (!window.confirm(`Remove ${teamName}'s weapons screenshot?`)) return;
+    setBusy(teamId);
+    setBanner(null);
+    try {
+      await api.delete(`/api/organizer/bracket/weapons/${encodeURIComponent(match.key)}`, {
+        params: { team_id: teamId },
+      });
+      await onDone();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const have = sides.filter((x) => x.shot).length;
+
+  return (
+    <Panel
+      title="Weapons"
+      subtitle="What each team brought, before the game"
+      className="mb-4 max-w-[900px]"
+      right={
+        <span className={`text-xs ${have === sides.length ? 'text-verdigris' : 'text-ash'}`}>
+          {have} of {sides.length}
+        </span>
+      }
+    >
+      <div className="p-4 grid gap-4 sm:grid-cols-2">
+        {sides.map(({ slot, team, id, shot }) => (
+          <div key={slot} className="flex flex-col gap-2">
+            <div className="flex items-baseline gap-2">
+              <span className="text-[13px] font-semibold truncate">{team?.name || 'TBD'}</span>
+              {team?.tag && <span className="mono text-[11px] text-ash">{team.tag}</span>}
+            </div>
+
+            {shot ? (
+              <>
+                {/* Links out rather than lightboxing: a comp screenshot is read
+                    at full size or not at all, and a modal that shrinks it to
+                    fit is a modal you close to open the image anyway. */}
+                <a href={shot.url || '#'} target="_blank" rel="noreferrer noopener"
+                   className="block border border-line rounded overflow-hidden hover:border-crimson">
+                  {shot.url
+                    ? <img src={shot.url} alt={`${team?.name || 'Team'} weapons`}
+                           className="w-full h-[150px] object-cover object-top" />
+                    : <div className="h-[150px] grid place-items-center text-[12px] text-ash">
+                        saved — link expired, reload
+                      </div>}
+                </a>
+                <div className="flex items-center gap-3 text-[11px] text-ash">
+                  <span>{shot.uploaded_by ? `added by ${shot.uploaded_by}` : 'added'}</span>
+                  {canEdit && (
+                    <>
+                      <label className="underline underline-offset-2 hover:text-bone cursor-pointer">
+                        replace
+                        <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
+                               disabled={busy === id}
+                               onChange={(e) => upload(id, e.target.files?.[0])} />
+                      </label>
+                      <button
+                        onClick={() => remove(id, team?.name || 'that team')}
+                        disabled={busy === id}
+                        className="underline underline-offset-2 hover:text-crimsonbright disabled:opacity-45"
+                      >
+                        remove
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="border border-dashed border-line rounded h-[150px] grid place-items-center">
+                {canEdit ? (
+                  <label className="text-center cursor-pointer px-4">
+                    <span className="text-[12.5px] text-crimsonbright underline underline-offset-2">
+                      {busy === id ? 'Uploading…' : 'Attach a screenshot'}
+                    </span>
+                    <span className="block text-[11px] text-ash mt-1">PNG, JPEG or WebP</span>
+                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
+                           disabled={busy === id}
+                           onChange={(e) => upload(id, e.target.files?.[0])} />
+                  </label>
+                ) : (
+                  <span className="text-[12px] text-ash">Not submitted</span>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 function Schedule({ match, onSave }) {
   const [value, setValue] = useState(toLocalInput(match.scheduled_at));
   const [busy, setBusy] = useState(false);

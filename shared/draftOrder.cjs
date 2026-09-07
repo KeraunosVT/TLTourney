@@ -40,15 +40,83 @@ function slotFor(teamCount, pickNumber) {
   return { round, pickInRound: i + 1, seatIndex };
 }
 
+// ── The compensation pick ───────────────────────────────────────────────────
+/**
+ * One team, one extra pick, inserted at a fixed point in the order.
+ *
+ * A captain who does not play still occupies a roster slot — that is what keeps
+ * them off every other captain's board — so their team fields one fewer player
+ * than everybody else. The snake cannot fix that on its own: every team gets
+ * exactly `rounds` picks, and that uniformity is the closed form this whole
+ * file is built on.
+ *
+ * So the extra pick sits OUTSIDE the snake, as a single insertion. `comp` is
+ * `{ afterPick, teamId }` — null in a draft that owes nobody anything, which is
+ * every draft but this one.
+ *
+ * WHERE it goes is a fairness decision, not an arithmetic one. It lands at the
+ * moment every team has its 48 starters, so the compensated team fills its
+ * starting side at the same time as everyone else and the extra body comes off
+ * a board that still has bench talent on it. Appending it to the very end would
+ * be simpler and would hand them whoever was left after 256 picks.
+ *
+ * ── Everything below runs through resolvePick ────────────────────────────────
+ * The snake arithmetic is untouched. `slotFor` still answers about a pure
+ * snake, and this maps a DRAFT pick number onto it: picks after the insertion
+ * point are one ahead of their snake position, so they shift back by one.
+ * Keeping the two separate is what lets the closed form stay closed.
+ */
+function resolvePick(pickNumber, comp) {
+  if (!comp || !comp.teamId || pickNumber <= comp.afterPick) {
+    return { comp: false, snakePick: pickNumber };
+  }
+  if (pickNumber === comp.afterPick + 1) return { comp: true };
+  return { comp: false, snakePick: pickNumber - 1 };
+}
+
 /** The team id on the clock for a given pick, or null if that pick isn't one. */
-function teamOnClock(order, pickNumber) {
-  const slot = slotFor(order.length, pickNumber);
+function teamOnClock(order, pickNumber, comp = null) {
+  const r = resolvePick(pickNumber, comp);
+  if (r.comp) return comp.teamId ?? null;
+  const slot = slotFor(order.length, r.snakePick);
   if (!slot) return null;
   return order[slot.seatIndex] ?? null;
 }
 
-/** Total picks in a draft of this shape. */
-const totalPicks = (teamCount, rounds) => Math.max(0, teamCount * rounds);
+/**
+ * Where a DRAFT pick sits, compensation included.
+ *
+ * The compensation pick reports the round it follows and is flagged, so the
+ * page can say "round 46 · compensation" rather than inventing a round 46.5 or
+ * quietly renumbering every round after it.
+ */
+function draftSlot(teamCount, pickNumber, comp = null) {
+  const r = resolvePick(pickNumber, comp);
+  if (r.comp) {
+    const prev = slotFor(teamCount, comp.afterPick);
+    return prev ? { ...prev, compensation: true, pickInRound: null } : null;
+  }
+  const slot = slotFor(teamCount, r.snakePick);
+  return slot ? { ...slot, compensation: false } : null;
+}
+
+/** Total picks in a draft of this shape, the compensation pick included. */
+const totalPicks = (teamCount, rounds, comp = null) =>
+  Math.max(0, teamCount * rounds) + (comp?.teamId ? 1 : 0);
+
+/**
+ * When the compensation pick falls, given how the rosters start.
+ *
+ * `startersPerTeam` is the 48; `playingStart` is how many PLAYING members a
+ * full-strength team already has (both captains, so two). After round R such a
+ * team holds playingStart + R, so it reaches its starters at R = starters −
+ * playingStart, and the extra pick goes immediately after that round.
+ *
+ * Returned as a pick number rather than a round because that is what the clock
+ * compares against, and converting once here beats converting at every read.
+ */
+const compAfterPick = (teamCount, startersPerTeam, playingStart) =>
+  teamCount * Math.max(0, startersPerTeam - playingStart);
 
 /**
  * The next `count` picks from `fromPick` onwards, as
@@ -57,12 +125,19 @@ const totalPicks = (teamCount, rounds) => Math.max(0, teamCount * rounds);
  * What the "on deck" strip is built from — a captain three picks away wants to
  * be reading their board now, not when the banner turns red.
  */
-function upcoming(order, fromPick, count, rounds) {
-  const total = totalPicks(order.length, rounds);
+function upcoming(order, fromPick, count, rounds, comp = null) {
+  const total = totalPicks(order.length, rounds, comp);
   const out = [];
   for (let p = fromPick; p <= total && out.length < count; p++) {
-    const slot = slotFor(order.length, p);
-    out.push({ pick: p, round: slot.round, pickInRound: slot.pickInRound, teamId: order[slot.seatIndex] });
+    const slot = draftSlot(order.length, p, comp);
+    if (!slot) continue;
+    out.push({
+      pick: p,
+      round: slot.round,
+      pickInRound: slot.pickInRound,
+      compensation: slot.compensation,
+      teamId: teamOnClock(order, p, comp),
+    });
   }
   return out;
 }
@@ -77,10 +152,10 @@ function upcoming(order, fromPick, count, rounds) {
  * off-by-one in each, which is a lot of subtlety to hide for the sake of
  * skipping eight iterations.
  */
-function nextPickFor(order, teamId, fromPick, rounds) {
-  const total = totalPicks(order.length, rounds);
+function nextPickFor(order, teamId, fromPick, rounds, comp = null) {
+  const total = totalPicks(order.length, rounds, comp);
   for (let p = Math.max(1, fromPick); p <= total; p++) {
-    if (teamOnClock(order, p) === teamId) return p;
+    if (teamOnClock(order, p, comp) === teamId) return p;
   }
   return null;
 }
@@ -89,9 +164,11 @@ function nextPickFor(order, teamId, fromPick, rounds) {
  * The whole order, flattened. Not used at runtime — this is what the tests
  * check the closed form against, and what makes the shape obvious to read.
  */
-function fullOrder(order, rounds) {
+function fullOrder(order, rounds, comp = null) {
   const out = [];
-  for (let p = 1; p <= totalPicks(order.length, rounds); p++) out.push(teamOnClock(order, p));
+  for (let p = 1; p <= totalPicks(order.length, rounds, comp); p++) {
+    out.push(teamOnClock(order, p, comp));
+  }
   return out;
 }
 
@@ -104,9 +181,10 @@ function fullOrder(order, rounds) {
  * over fifteen hours. An organizer who sees that before draft night can shorten
  * the clock or shrink the roster; one who doesn't finds out at 3am.
  */
-const worstCaseSeconds = (teamCount, rounds, pickSeconds) =>
-  totalPicks(teamCount, rounds) * pickSeconds;
+const worstCaseSeconds = (teamCount, rounds, pickSeconds, comp = null) =>
+  totalPicks(teamCount, rounds, comp) * pickSeconds;
 
 module.exports = {
-  slotFor, teamOnClock, totalPicks, upcoming, nextPickFor, fullOrder, worstCaseSeconds,
+  slotFor, draftSlot, resolvePick, teamOnClock, totalPicks, compAfterPick,
+  upcoming, nextPickFor, fullOrder, worstCaseSeconds,
 };

@@ -31,8 +31,17 @@ function rosterProgress(members, rosterSize = 0) {
   const byRole = {};
   ROLES.forEach((r) => { byRole[r] = 0; });
 
+  // A member marked `playing: false` is on the roster and will not take the
+  // field — a captain holding a seat without playing (migration 028). They keep
+  // their roster row, because that is what stops another team drafting them,
+  // and they are counted out of everything about the TEAM: the role totals, the
+  // role cap, and the seats the party builder can fill.
+  //
+  // Absent or true both mean playing. Every row predates the column.
+  const playing = members.filter((m) => m.playing !== false);
+
   let unanswered = 0;
-  members.forEach((m) => {
+  playing.forEach((m) => {
     if (m.role && byRole[m.role] !== undefined) byRole[m.role] += 1;
     else unanswered += 1;
   });
@@ -40,6 +49,10 @@ function rosterProgress(members, rosterSize = 0) {
   const filled = members.length;
   return {
     filled,
+    // How many will actually play. Equal to `filled` on every team but one, and
+    // the difference is the whole reason the compensation pick exists.
+    playing: playing.length,
+    nonPlaying: filled - playing.length,
     size: rosterSize,
     remaining: Math.max(0, rosterSize - filled),
     captains: members.filter((m) => m.via === VIA_CAPTAIN).length,

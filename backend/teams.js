@@ -77,7 +77,7 @@ const withCaptains = (teams, byTeam) =>
   teams.map((t) => ({ ...t, captains: byTeam.get(t.id) || [] }));
 
 // Everybody on a roster in this tournament, keyed by team.
-const ROSTER_ROWS = `team_id, via, draft_round, draft_pick, player:player_signups (
+const ROSTER_ROWS = `team_id, via, playing, draft_round, draft_pick, player:player_signups (
   id, player_name, discord_id, discord_username, role, classes, positions
 )`;
 
@@ -91,6 +91,10 @@ async function rostersByTeam(tournamentId) {
     if (!byTeam.has(row.team_id)) byTeam.set(row.team_id, []);
     byTeam.get(row.team_id).push({
       via: row.via,
+      // Carried, not defaulted here: `!== false` is the test everywhere
+      // downstream, so a row from before migration 028 (undefined) and a row
+      // that says true behave identically.
+      playing: row.playing,
       draft_round: row.draft_round,
       draft_pick: row.draft_pick,
       ...row.player,

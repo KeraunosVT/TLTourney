@@ -30,11 +30,15 @@ const { sendDM } = require('./discord');
 const {
   captaincyFor, captainsByTeam, rostersByTeam, rosteredIds, addToRoster, conflictMessage,
 } = require('./teams');
-const { slotFor, teamOnClock, totalPicks, upcoming, nextPickFor, worstCaseSeconds } = require('../shared/draftOrder.cjs');
+const {
+  draftSlot, teamOnClock, totalPicks, compAfterPick, upcoming, nextPickFor, worstCaseSeconds,
+} = require('../shared/draftOrder.cjs');
 const { autoPick } = require('../shared/autopick.cjs');
 const { tierMeta } = require('../shared/board.cjs');
 const { rosterProgress } = require('../shared/roster.cjs');
-const { roleDemand, rosterDemand, roleRoom } = require('../shared/parties.cjs');
+const {
+  roleDemand, rosterDemand, roleRoom, startersPerTeam,
+} = require('../shared/parties.cjs');
 const { safeInvite } = require('../shared/invites.cjs');
 const { ROLES } = require('../shared/roles.cjs');
 
@@ -121,7 +125,13 @@ function readFailure(res, err, what) {
 }
 
 const order = (d) => (Array.isArray(d.order_snapshot) ? d.order_snapshot : []);
-const total = (d) => totalPicks(order(d).length, d.rounds);
+// The compensation pick as the engine wants it, or null. Read off the drafts
+// row so it is frozen with the order and the round count — see migration 028.
+const compOf = (d) => (d?.comp_team_id && d?.comp_after_pick != null
+  ? { teamId: d.comp_team_id, afterPick: d.comp_after_pick }
+  : null);
+
+const total = (d) => totalPicks(order(d).length, d.rounds, compOf(d));
 const deadlineFrom = (seconds) => new Date(Date.now() + seconds * 1000).toISOString();
 
 // ── The clock ───────────────────────────────────────────────────────────────
@@ -178,7 +188,7 @@ async function stall(t, d, late) {
 }
 
 async function autoPickNow(t, d) {
-  const teamId = teamOnClock(order(d), d.current_pick);
+  const teamId = teamOnClock(order(d), d.current_pick, compOf(d));
   if (!teamId) return null;
 
   const choice = await chooseAuto(t, d, teamId);
@@ -467,8 +477,15 @@ async function makePick(t, d, { teamId, signupId, auto = false, madeBy = null, r
     return { error: 'Every pick has already been made.', code: 409 };
   }
 
-  const slot = slotFor(seats.length, d.current_pick);
-  const onClock = seats[slot.seatIndex];
+  const slot = draftSlot(seats.length, d.current_pick, compOf(d));
+
+  // Asked of teamOnClock rather than read off slot.seatIndex, and the
+  // difference only shows on ONE pick in the whole draft. A compensation pick
+  // reports the round it follows, so its seatIndex is the seat that had the
+  // last pick of that round — not the team the pick belongs to. Indexing the
+  // seat would have handed pick 185 to whoever picked 184 and rejected the
+  // team it was created for.
+  const onClock = teamOnClock(seats, d.current_pick, compOf(d));
   if (onClock !== teamId) {
     return { error: 'It is not that team\'s pick.', code: 409 };
   }
@@ -791,9 +808,9 @@ async function assembleState(t, d) {
   });
 
   const onClock = d.status === 'live' || d.status === 'paused'
-    ? teamOnClock(seats, d.current_pick)
+    ? teamOnClock(seats, d.current_pick, compOf(d))
     : null;
-  const here = slotFor(seats.length, d.current_pick);
+  const here = draftSlot(seats.length, d.current_pick, compOf(d));
 
   // How many of each role every team still HAS to find, added up. Paired with
   // how many are left in the pool this is the scarcity story a commentator
@@ -815,6 +832,8 @@ async function assembleState(t, d) {
 
   const state = {
     tournament: { name: t.name, status: t.status, rosterSize: t.roster_size },
+    // The 48. Used by the start check to place the compensation pick.
+    starters: startersPerTeam(template),
     draft: {
       status: d.status,
       // Reaches the captains' page, the stream scene and the overlay from here.
@@ -822,6 +841,9 @@ async function assembleState(t, d) {
       // reads false instead of undefined, which renders as "not a mock" either
       // way but stops a `null` reaching a badge that tests for it.
       isMock: d.is_mock === true,
+      // The extra pick this draft owes, if any. The page uses it to label pick
+      // 185 as a compensation rather than as an off-by-one in round 46.
+      compensation: compOf(d),
       pickSeconds: d.pick_seconds,
       currentPick: d.current_pick,
       totalPicks: total(d),
@@ -837,7 +859,7 @@ async function assembleState(t, d) {
       startedAt: d.started_at,
       completedAt: d.completed_at,
       onClock,
-      onDeck: upcoming(seats, d.current_pick + 1, 5, d.rounds),
+      onDeck: upcoming(seats, d.current_pick + 1, 5, d.rounds, compOf(d)),
       order: seats,
     },
     teams,
@@ -1075,7 +1097,7 @@ router.get('/', async (req, res) => {
     let board = [];
     if (mine) {
       const seats = order(d);
-      const next = nextPickFor(seats, mine.id, d.current_pick, d.rounds);
+      const next = nextPickFor(seats, mine.id, d.current_pick, d.rounds, compOf(d));
       you = {
         teamId: mine.id,
         name: mine.name,
@@ -1195,7 +1217,7 @@ const organizerRouter = express.Router();
  * @param rosterSize how many players a full roster holds
  * @param teams      [{ name, seed, rosterCount, captainCount }]
  */
-function startProblems(rosterSize, teams) {
+function startProblems(rosterSize, teams, starters = rosterSize) {
   const problems = [];
   const names = (list) => list.map((x) => x.name).join(', ');
 
@@ -1232,7 +1254,46 @@ function startProblems(rosterSize, teams) {
     problems.push(`A roster is ${rosterSize} and the teams already hold ${start} — there is nothing to draft.`);
   }
 
-  return { problems, rounds: Math.max(0, rounds) };
+  // ── Who is owed a compensation pick ───────────────────────────────────────
+  // The level check above is about ROSTER rows, and it still passes: a
+  // non-playing captain occupies a slot like any other, so every team starts
+  // with two. What differs is how many of those two will take the field.
+  //
+  // A team short on PLAYING members gets one extra pick for each one missing —
+  // in practice one, for one non-playing captain — and it is refused above one,
+  // because the engine inserts a single pick and a second would need a second
+  // insertion point and a fairness argument nobody has made.
+  const playingStart = Math.max(...teams.map((x) => x.playingCount ?? x.rosterCount), 0);
+  const short = teams
+    .map((x) => ({ ...x, owed: playingStart - (x.playingCount ?? x.rosterCount) }))
+    .filter((x) => x.owed > 0);
+
+  if (short.some((x) => x.owed > 1)) {
+    problems.push(`${names(short.filter((x) => x.owed > 1))} would be owed more than one `
+      + 'compensation pick, and only one can be inserted. Even the rosters up first.');
+  }
+  if (short.length > 1) {
+    problems.push(`${names(short)} are each short a playing member. Only one compensation `
+      + 'pick can be inserted — sort the others out first.');
+  }
+
+  // Where it falls: the moment every full-strength team has its starters. The
+  // compensated team reaches the same number on this pick, so it fills its
+  // starting side alongside everyone else rather than at the very end off a
+  // board that has been picked over 256 times.
+  const owed = short.length === 1 && short[0].owed === 1 ? short[0] : null;
+
+  return {
+    problems,
+    rounds: Math.max(0, rounds),
+    comp: owed
+      ? {
+        teamId: owed.id,
+        teamName: owed.name,
+        afterPick: compAfterPick(teams.length, starters, playingStart),
+      }
+      : null,
+  };
 }
 
 organizerRouter.get('/', async (req, res) => {
@@ -1251,12 +1312,20 @@ organizerRouter.get('/', async (req, res) => {
       // that travels to the page, and counting it would report every team as
       // holding eight players and refuse to start a draft that was fine.
       state.teams.map((x) => ({
-        name: x.name, seed: x.seed,
-        rosterCount: x.progress.filled, captainCount: x.captains.length,
-      }))
+        id: x.id, name: x.name, seed: x.seed,
+        rosterCount: x.progress.filled,
+        playingCount: x.progress.playing ?? x.progress.filled,
+        captainCount: x.captains.length,
+      })),
+      state.starters
     );
 
-    const picks = totalPicks(state.teams.length, d.rounds || check.rounds);
+    // The plan shown BEFORE the draft starts uses the compensation the check
+    // just worked out; once it is running, the frozen one on the row.
+    const planComp = compOf(d) || (check.comp
+      ? { teamId: check.comp.teamId, afterPick: check.comp.afterPick }
+      : null);
+    const picks = totalPicks(state.teams.length, d.rounds || check.rounds, planComp);
     res.json({
       ...stamped(state),
       canStart: check.problems.length === 0,
@@ -1266,7 +1335,12 @@ organizerRouter.get('/', async (req, res) => {
         picks,
         // The number nobody works out in advance, and the one that decides
         // whether draft night is an evening or a weekend.
-        worstCaseSeconds: worstCaseSeconds(state.teams.length, d.rounds || check.rounds, d.pick_seconds),
+        worstCaseSeconds: worstCaseSeconds(
+          state.teams.length, d.rounds || check.rounds, d.pick_seconds, planComp,
+        ),
+        // Named so the organizer sees the rule before pressing start rather
+        // than discovering an extra pick at round 46.
+        compensation: check.comp || (compOf(d) && { teamId: d.comp_team_id, afterPick: d.comp_after_pick }) || null,
       },
     });
   } catch (err) {
@@ -1300,11 +1374,17 @@ organizerRouter.post('/start', async (req, res) => {
   if (teamsRes.error) return res.status(500).json({ error: 'Could not read the teams.' });
 
   const teams = teamsRes.data || [];
-  const check = startProblems(t.roster_size, teams.map((x) => ({
-    name: x.name, seed: x.seed,
-    rosterCount: (rosters.get(x.id) || []).length,
-    captainCount: (byCaptain.get(x.id) || []).length,
-  })));
+  const check = startProblems(t.roster_size, teams.map((x) => {
+    const members = rosters.get(x.id) || [];
+    return {
+      id: x.id, name: x.name, seed: x.seed,
+      rosterCount: members.length,
+      // Everyone on the roster who will actually take the field. A non-playing
+      // captain is on the roster and not in this number — see migration 028.
+      playingCount: members.filter((mm) => mm.playing !== false).length,
+      captainCount: (byCaptain.get(x.id) || []).length,
+    };
+  }), startersPerTeam(Array.isArray(t.party_template) ? t.party_template : []));
   if (check.problems.length) return res.status(409).json({ error: check.problems[0], problems: check.problems });
 
   const seconds = req.body?.pick_seconds === undefined ? d.pick_seconds : Number(req.body.pick_seconds);
@@ -1318,10 +1398,19 @@ organizerRouter.post('/start', async (req, res) => {
   const mock = req.body?.mock === true;
 
   const snapshot = teams.map((x) => x.id);   // already in seed order
+
+  // Frozen alongside the order and the round count, and for the same reason
+  // migration 010 gives: whose turn it is must not be able to change under a
+  // running draft. If a non-playing captain is marked after the draft starts,
+  // it applies to the NEXT one.
+  const comp = check.comp;
+
   const { data, error } = await supabase.from('drafts').update({
     status: 'live',
     is_mock: mock,
     order_snapshot: snapshot,
+    comp_team_id: comp?.teamId ?? null,
+    comp_after_pick: comp?.afterPick ?? null,
     rounds: check.rounds,
     pick_seconds: seconds,
     current_pick: 1,
@@ -1579,6 +1668,9 @@ organizerRouter.post('/reset', async (req, res) => {
   const { data, error } = await supabase.from('drafts').update({
     status: 'pending', is_mock: false, current_pick: 1, pick_deadline: null, paused_reason: null,
     order_snapshot: [], rounds: 0, started_at: null, completed_at: null,
+    // Cleared with the order it was frozen beside. Who is owed a compensation
+    // pick is decided when a draft STARTS, off the rosters as they are then.
+    comp_team_id: null, comp_after_pick: null,
   }).eq('tournament_id', t.id).select('*').single();
   if (error) return res.status(500).json({ error: 'Could not reset the draft.' });
 

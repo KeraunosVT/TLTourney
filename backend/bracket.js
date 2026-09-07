@@ -8,6 +8,7 @@
 // Deliberately thin. Every line of bracket reasoning that leaks in here is a
 // line that can only be tested with a database.
 const express = require('express');
+const multer = require('multer');
 const { supabase, currentTournament, audit } = require('./db');
 const {
   generateBracket, generateRoundRobin, roundRobinStandings, applyResult, roundLabel,
@@ -61,6 +62,56 @@ const fromEngine = (m, tournamentId) => ({
   // by a second statement is one that is wrong if the second statement fails.
   ...(m.bestOf ? { best_of: m.bestOf } : {}),
 });
+
+// ── Weapon screenshots ──────────────────────────────────────────────────────
+// The one image this app keeps (migration 027). Bytes live in the private
+// 'weapons' Storage bucket; this table holds the path.
+const WEAPONS_BUCKET = 'weapons';
+
+// How long a link to an image is good for. Long enough to open a match page,
+// look at both comps and come back; short enough that a URL pasted into Discord
+// stops working rather than becoming a permanent public link to a private
+// bucket. Regenerated on every read, so it is never the user's problem.
+const WEAPON_URL_TTL = 60 * 60;
+
+const WEAPON_COLS = 'id, match_id, team_id, storage_path, uploaded_by, created_at';
+
+/**
+ * Every weapon screenshot in the tournament, keyed by match, with a signed URL.
+ *
+ * Signing is one round trip per image and they are minted in parallel. A
+ * failure to sign is not fatal: the row still says a screenshot EXISTS, which
+ * is the thing the bracket flags on, and a broken link is better than a match
+ * that reads as missing one.
+ */
+async function readWeapons(tournamentId) {
+  const { data, error } = await supabase
+    .from('match_weapons').select(WEAPON_COLS).eq('tournament_id', tournamentId);
+  if (error) {
+    // 027 not applied yet. The bracket is far more important than this, so it
+    // degrades to "no screenshots" rather than taking the page down.
+    if (/schema cache|does not exist|relation/i.test(error.message)) return new Map();
+    throw new Error(`weapons read failed: ${error.message}`);
+  }
+
+  const rows = data || [];
+  const signed = await Promise.all(rows.map(async (r) => {
+    try {
+      const { data: s } = await supabase.storage
+        .from(WEAPONS_BUCKET).createSignedUrl(r.storage_path, WEAPON_URL_TTL);
+      return { ...r, url: s?.signedUrl || null };
+    } catch {
+      return { ...r, url: null };
+    }
+  }));
+
+  const byMatch = new Map();
+  signed.forEach((r) => {
+    if (!byMatch.has(r.match_id)) byMatch.set(r.match_id, []);
+    byMatch.get(r.match_id).push(r);
+  });
+  return byMatch;
+}
 
 const GAME = 'id, match_id, game_number, map, winner_team_id, scoreboard_at, decided_at, decided_by';
 
@@ -160,11 +211,12 @@ async function settle(tournamentId) {
 
 // ── Reading it ──────────────────────────────────────────────────────────────
 async function bracketState(tournamentId) {
-  const [rows, teamsRes, gamesByMatch] = await Promise.all([
+  const [rows, teamsRes, gamesByMatch, weaponsByMatch] = await Promise.all([
     readMatches(tournamentId),
     supabase.from('teams').select(TEAM).eq('tournament_id', tournamentId)
       .order('seed', { ascending: true, nullsFirst: false }),
     readGames(tournamentId),
+    readWeapons(tournamentId),
   ]);
   if (teamsRes.error) throw new Error(`bracket teams read failed: ${teamsRes.error.message}`);
 
@@ -190,6 +242,14 @@ async function bracketState(tournamentId) {
         winner: byId.get(r.winner_team_id) || null,
         games,
         series: seriesResult(games, r.best_of, r.team_a_id, r.team_b_id),
+        // Attached BY TEAM, surfaced by side, because that is how the card is
+        // drawn. A screenshot whose team is no longer in the match resolves to
+        // neither side and shows up as missing — which is the truth.
+        weapons: (() => {
+          const mine = weaponsByMatch.get(r.id) || [];
+          const forTeam = (id) => mine.find((w) => id && w.team_id === id) || null;
+          return { a: forTeam(r.team_a_id), b: forTeam(r.team_b_id) };
+        })(),
         // Worked out here rather than on the page, so the picker and the
         // validation that refuses a banned map are reading the same list.
         maps_available: available([...(r.bans_a || []), ...(r.bans_b || [])]),
@@ -429,6 +489,131 @@ organizerRouter.get('/', async (req, res) => {
     console.error('organizer bracket read failed:', err.message);
     res.status(500).json({ error: 'Could not read the bracket.' });
   }
+});
+
+// ── Weapon screenshots: attach, replace, remove ─────────────────────────────
+// Organizers only, which is the whole permission model here — there is no
+// captain-facing upload, so `requireOrganizer` on the mount is the entire
+// check and this file adds none of its own.
+//
+// One file, in memory, capped well under the scoreboard route's limit: a comp
+// screenshot is a single frame, not a paginated 50v50 board.
+const weaponUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+});
+
+const WEAPON_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+
+organizerRouter.post('/weapons/:key', weaponUpload.single('file'), async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'Attach a screenshot.' });
+  if (!WEAPON_TYPES.includes(file.mimetype)) {
+    return res.status(400).json({ error: 'That has to be a PNG, JPEG or WebP image.' });
+  }
+
+  const { data: match } = await supabase.from('matches')
+    .select('id, key, team_a_id, team_b_id')
+    .eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
+  if (!match) return res.status(404).json({ error: 'No such match.' });
+
+  // The team has to be IN this match. Checked rather than trusted: without it
+  // an organizer could attach a comp to a match the team never played, and it
+  // would render on neither side and be invisible.
+  const teamId = String(req.body?.team_id || '');
+  if (teamId !== match.team_a_id && teamId !== match.team_b_id) {
+    return res.status(400).json({ error: 'That team is not in this match.' });
+  }
+
+  // Path carries the tournament, the match and the team, so an object is
+  // identifiable from its name alone when somebody is staring at the bucket
+  // trying to work out what a file is. The timestamp makes replacing a
+  // screenshot a new object rather than an overwrite — the old one is deleted
+  // below, and doing it in that order means a failed delete leaves a stray file
+  // rather than a row pointing at nothing.
+  const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' }[file.mimetype];
+  const path = `${t.id}/${match.key}/${teamId}-${Date.now()}.${ext}`;
+
+  const { error: upErr } = await supabase.storage
+    .from(WEAPONS_BUCKET).upload(path, file.buffer, { contentType: file.mimetype });
+  if (upErr) {
+    // The predictable one: 027 not applied, so the bucket does not exist.
+    if (/bucket|not found/i.test(upErr.message || '')) {
+      return res.status(503).json({
+        error: 'The weapons bucket is missing — run migrations/027_weapon_shots.sql first.',
+      });
+    }
+    console.error('weapon upload failed:', upErr.message);
+    return res.status(500).json({ error: 'Could not store that screenshot.' });
+  }
+
+  const { data: prior } = await supabase.from('match_weapons')
+    .select('storage_path').eq('match_id', match.id).eq('team_id', teamId).maybeSingle();
+
+  const { error: rowErr } = await supabase.from('match_weapons').upsert({
+    tournament_id: t.id,
+    match_id: match.id,
+    team_id: teamId,
+    storage_path: path,
+    uploaded_by: req.user?.username || null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'match_id,team_id' });
+
+  if (rowErr) {
+    // Row failed, so the object is unreferenced — take it back out rather than
+    // leave a file nothing points at.
+    await supabase.storage.from(WEAPONS_BUCKET).remove([path]).catch(() => {});
+    if (/schema cache|does not exist|relation/i.test(rowErr.message)) {
+      return res.status(503).json({
+        error: 'The match_weapons table is missing — run migrations/027_weapon_shots.sql first.',
+      });
+    }
+    console.error('weapon row failed:', rowErr.message);
+    return res.status(500).json({ error: 'The image uploaded but was not recorded — try again.' });
+  }
+
+  // The one it replaced. Not fatal: the row now points at the new file, and a
+  // leftover object is a few kilobytes, not a wrong answer.
+  if (prior?.storage_path && prior.storage_path !== path) {
+    const { error } = await supabase.storage.from(WEAPONS_BUCKET).remove([prior.storage_path]);
+    if (error) console.warn(`old weapon screenshot left behind: ${prior.storage_path}`);
+  }
+
+  await audit(req.user, 'bracket.weapons.upload', match.id, {
+    match: match.key, team: teamId, replaced: !!prior,
+  });
+  res.json({ ok: true, ...(await bracketState(t.id)) });
+});
+
+organizerRouter.delete('/weapons/:key', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const { data: match } = await supabase.from('matches')
+    .select('id, key').eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
+  if (!match) return res.status(404).json({ error: 'No such match.' });
+
+  const teamId = String(req.query.team_id || req.body?.team_id || '');
+  const { data: row } = await supabase.from('match_weapons')
+    .select('id, storage_path').eq('match_id', match.id).eq('team_id', teamId).maybeSingle();
+  if (!row) return res.status(404).json({ error: 'There is no screenshot for that team.' });
+
+  // File first, then the row. The other order can leave a row pointing at an
+  // object that is already gone, which renders as a broken image rather than
+  // as the absence it actually is.
+  const { error: rmErr } = await supabase.storage.from(WEAPONS_BUCKET).remove([row.storage_path]);
+  if (rmErr) console.warn(`weapon file not removed (${row.storage_path}): ${rmErr.message}`);
+
+  const { error } = await supabase.from('match_weapons').delete().eq('id', row.id);
+  if (error) return res.status(500).json({ error: 'Could not remove that screenshot.' });
+
+  await audit(req.user, 'bracket.weapons.remove', match.id, { match: match.key, team: teamId });
+  res.json({ ok: true, ...(await bracketState(t.id)) });
 });
 
 /**

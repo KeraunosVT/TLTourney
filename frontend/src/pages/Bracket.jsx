@@ -275,6 +275,12 @@ function Half({ title, columns, onPick, canRecord, busy, tone = 'winner' }) {
 }
 
 function MatchCard({ m, onPick, canRecord, busy }) {
+  // Missing weapons screenshots, counted. Only for matches that have two teams
+  // and are actually played — a pending slot has nobody to be missing one, and
+  // a walkover was never played.
+  const weaponsShort = m.kind === 'match' && m.team_a_id && m.team_b_id
+    ? ['a', 'b'].filter((side) => !m.weapons?.[side]).length
+    : 0;
   const [armed, setArmed] = useState(null);
 
   // A reset that never became live is structure, not a fixture. Shown greyed
@@ -315,6 +321,18 @@ function MatchCard({ m, onPick, canRecord, busy }) {
         {m.kind === 'walkover' && <span className="text-[9px] uppercase tracking-[0.1em] text-ash">bye</span>}
         {m.status === 'ready' && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">ready</span>}
         {m.is_reset && !dormant && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">reset</span>}
+        {/* A marker, not a block. Visible from the bracket so nobody has to
+            open six match pages to find the one that is missing a comp. */}
+        {weaponsShort > 0 && (
+          <span
+            className="text-[9px] uppercase tracking-[0.1em] text-oxblood whitespace-nowrap"
+            title={weaponsShort === 2
+              ? 'Neither team has a weapons screenshot'
+              : 'One team has no weapons screenshot'}
+          >
+            {weaponsShort === 2 ? 'no weapons' : 'weapons 1/2'}
+          </span>
+        )}
       </div>
 
       {['a', 'b'].map((slot) => {
