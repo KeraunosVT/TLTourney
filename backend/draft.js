@@ -35,6 +35,7 @@ const { autoPick } = require('../shared/autopick.cjs');
 const { tierMeta } = require('../shared/board.cjs');
 const { rosterProgress } = require('../shared/roster.cjs');
 const { roleDemand, rosterDemand, roleRoom } = require('../shared/parties.cjs');
+const { safeInvite } = require('../shared/invites.cjs');
 const { ROLES } = require('../shared/roles.cjs');
 
 // How late a deadline may be before the draft stops itself instead of picking.
@@ -577,7 +578,62 @@ async function makePick(t, d, { teamId, signupId, auto = false, madeBy = null, r
   invalidate(t.id);
   armTimer(t, draft);
 
+  // 4. Tell the player. Deliberately last, after everything that can fail has
+  // succeeded — a DM saying "you were drafted" sent before the roster row is
+  // written is a message that can be wrong, and there is no unsending it.
+  //
+  // NOT ON A MOCK DRAFT. A rehearsal messaging two hundred and forty people
+  // "you were drafted, here is your team's Discord" is the single worst thing
+  // this app could do by accident, and the rehearsal we ran is exactly when it
+  // would have happened. is_mock exists for this — see migration 019.
+  //
+  // Fire-and-forget and non-fatal, like every DM here: the pick is made whether
+  // or not Discord cooperates, and a closed inbox is not an error.
+  if (!draft.is_mock && player.discord_id) {
+    notifyDrafted(t, teamId, player, pick);
+  }
+
   return { pick, draft, player, reason, cleared: cleared || [] };
+}
+
+/**
+ * "You were drafted, and here is where to go."
+ *
+ * The team is read here rather than passed in because makePick only ever holds
+ * an id, and this is the one place that needs the name and the invite. One
+ * extra query per pick — a pick happens every minute or two.
+ *
+ * A team with no invite still sends the message without one. Being drafted is
+ * worth hearing on its own, and a player who knows their team can find it.
+ */
+async function notifyDrafted(t, teamId, player, pick) {
+  try {
+    const { data: team } = await supabase
+      .from('teams').select('name, tag, discord_url').eq('id', teamId).maybeSingle();
+    if (!team) return;
+
+    const invite = safeInvite(team.discord_url);
+
+    const lines = [
+      `🎉 **You were drafted.** ${team.name}${team.tag ? ` (${team.tag})` : ''} `
+        + `picked you in the **${t.name}** draft — round ${pick.round}, pick ${pick.pick_number}.`,
+    ];
+    // Checked through safeInvite on the way OUT as well as on the way in.
+    // The column predates nothing, but a row edited by hand in the Supabase
+    // table editor never passed the API's validation, and this is the message
+    // where a bad link would do the damage.
+    if (invite) {
+      lines.push('', `Join your team here: ${invite}`);
+    } else {
+      lines.push('', 'Your captain will be in touch about where the team organises.');
+    }
+
+    await sendDM(player.discord_id, lines.join('\n'));
+  } catch (err) {
+    // Never reaches the caller. The pick is already made and saved; this is
+    // the courtesy that follows it.
+    console.warn(`drafted DM failed (pick ${pick.pick_number}): ${err.message}`);
+  }
 }
 
 async function advance(t, d, justMade) {

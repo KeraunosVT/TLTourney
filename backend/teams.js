@@ -8,8 +8,9 @@ const { rosterDemand, startersPerTeam } = require('../shared/parties.cjs');
 const { ROLES } = require('../shared/roles.cjs');
 const { MAX_CAPTAINS_PER_TEAM, isSeat, seatLabel, firstFreeSeat } = require('../shared/captains.cjs');
 const { VIA_CAPTAIN, rosterProgress } = require('../shared/roster.cjs');
+const { safeInvite, INVITE_HINT } = require('../shared/invites.cjs');
 
-const TEAM = 'id, name, tag, seed, created_at, updated_at';
+const TEAM = 'id, name, tag, seed, discord_url, created_at, updated_at';
 
 // Captains are read as their own query and stitched in below rather than
 // embedded in the team select. team_captains reaches teams through a COMPOSITE
@@ -431,6 +432,20 @@ organizerRouter.put('/:id', async (req, res) => {
   }
   if (req.body?.tag !== undefined) {
     patch.tag = String(req.body.tag).trim().toUpperCase().slice(0, 6) || null;
+  }
+  // The team's own Discord, sent to every player it drafts. Validated through
+  // the same function the form calls — and refused rather than blanked,
+  // because a link silently dropped here is one that goes missing from a DM
+  // nobody thinks to check.
+  if (req.body?.discord_url !== undefined) {
+    const raw = String(req.body.discord_url ?? '').trim();
+    if (!raw) {
+      patch.discord_url = null;
+    } else {
+      const invite = safeInvite(raw);
+      if (!invite) return res.status(400).json({ error: INVITE_HINT });
+      patch.discord_url = invite;
+    }
   }
   if (req.body?.seed !== undefined) {
     if (req.body.seed === null) {

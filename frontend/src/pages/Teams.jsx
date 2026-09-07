@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Empty, Note, Field } from '../components/ui';
 import { CAPTAIN_SEATS } from '@shared/captains.cjs';
+import { safeInvite, INVITE_HINT, MAX_INVITE } from '@shared/invites.cjs';
 
 export default function Teams() {
   const [teams, setTeams] = useState([]);
@@ -236,6 +237,11 @@ export default function Teams() {
                     busy={busy === t.id}
                     onSave={(fields) => rename(t, fields)}
                   />
+                  <TeamInvite
+                    team={t}
+                    busy={busy === t.id}
+                    onSave={(fields) => rename(t, fields)}
+                  />
                   {/* One row per seat, always both, filled or not — an empty
                       co-captain seat is a thing to notice, and it disappears
                       entirely if empty seats aren't drawn. */}
@@ -442,6 +448,87 @@ function TeamName({ team, busy, onSave }) {
       <Button variant="ghost" type="button" disabled={busy} onClick={() => setEditing(false)} className="py-1">
         Cancel
       </Button>
+    </form>
+  );
+}
+
+// ── The team's own Discord ──────────────────────────────────────────────────
+// Sent to every player this team drafts, in the DM that tells them they were
+// picked. That is what makes an empty one worth showing rather than hiding: a
+// team with no invite still drafts, and its players just get no link — which
+// nobody notices until somebody asks where to go on draft night.
+function TeamInvite({ team, busy, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [url, setUrl] = useState(team.discord_url || '');
+  const [error, setError] = useState(null);
+
+  function open() {
+    setUrl(team.discord_url || '');
+    setError(null);
+    setEditing(true);
+  }
+
+  if (!editing) {
+    return (
+      <div className="mt-1 flex items-center gap-2 flex-wrap text-[11.5px]">
+        <span className="text-[10px] uppercase tracking-[0.14em] text-ash">Discord</span>
+        {team.discord_url ? (
+          <a
+            href={team.discord_url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="mono text-ash hover:text-crimsonbright truncate max-w-[240px]"
+          >
+            {team.discord_url.replace(/^https:\/\//, '')}
+          </a>
+        ) : (
+          // Named as a consequence, not a blank. "not set" would read as
+          // optional; this says what it costs.
+          <span className="text-oxblood">no invite — drafted players get no link</span>
+        )}
+        <button
+          onClick={open}
+          disabled={busy}
+          className="text-ash hover:text-crimsonbright underline underline-offset-2 disabled:opacity-45"
+        >
+          {team.discord_url ? 'change' : 'add'}
+        </button>
+      </div>
+    );
+  }
+
+  async function commit(e) {
+    e?.preventDefault();
+    const next = url.trim();
+    if (next === (team.discord_url || '')) return setEditing(false);
+    // Checked here with the same function the server uses, so a wrong paste is
+    // caught under the field rather than as a banner after a round trip.
+    if (next && !safeInvite(next)) return setError(INVITE_HINT);
+    setError(null);
+    if (await onSave({ discord_url: next })) setEditing(false);
+  }
+
+  return (
+    <form className="mt-1.5 flex flex-col gap-1" onSubmit={commit}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          autoFocus
+          className="field-input py-1 text-[12.5px] flex-1 min-w-[240px] max-w-[340px]"
+          value={url}
+          maxLength={MAX_INVITE}
+          placeholder="https://discord.gg/…"
+          onChange={(e) => { setUrl(e.target.value); setError(null); }}
+          onKeyDown={(e) => { if (e.key === 'Escape') setEditing(false); }}
+          aria-label={`Discord invite for ${team.name}`}
+        />
+        <Button type="submit" disabled={busy} className="py-1">
+          {busy ? 'Saving…' : 'Save'}
+        </Button>
+        <Button variant="ghost" type="button" disabled={busy} onClick={() => setEditing(false)} className="py-1">
+          Cancel
+        </Button>
+      </div>
+      {error && <p className="field-error">{error}</p>}
     </form>
   );
 }
