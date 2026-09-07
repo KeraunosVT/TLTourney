@@ -77,7 +77,7 @@ export default function Bracket() {
         matches: mine.filter((m) => m.round === round).sort((a, b) => a.idx - b.idx),
       }));
     };
-    return { W: by('W'), L: by('L'), GF: by('GF') };
+    return { RR: by('RR'), W: by('W'), L: by('L'), GF: by('GF') };
   }, [state?.matches]);
 
   if (loading) return <div className="p-8 text-sm text-ash">Loading the bracket…</div>;
@@ -90,8 +90,9 @@ export default function Bracket() {
         <div>
           <h1 className="font-display text-[27px]">Bracket</h1>
           <p className="text-ash text-sm mt-1.5 max-w-[70ch]">
-            Double elimination. A team is out on its second loss, and the grand final is played
-            twice if the losers-bracket team wins the first one.
+            A seeding stage first — every team plays every other once — and the table it
+            produces seeds a double-elimination bracket. A team is out on its second loss.
+            The grand final is a single best-of-five: no reset, so it ends when it ends.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -133,15 +134,26 @@ export default function Bracket() {
 
       {canRecord && <Controls state={state} onDone={load} setBanner={setBanner} />}
 
+      {state?.seeding?.exists && (
+        <Seeding
+          seeding={state.seeding}
+          columns={grouped.RR}
+          onPick={record}
+          canRecord={canRecord}
+          busy={busy}
+        />
+      )}
+
       {!state?.exists ? (
         <Panel className="mt-4 max-w-[760px]">
           <div className="p-6 text-center">
             <div className="eyebrow">No bracket yet</div>
             <p className="text-sm text-ash mt-2 max-w-[56ch] mx-auto leading-relaxed">
               {canRecord
-                ? 'Seed the teams, then generate. Every match of the tournament is created at once — '
-                  + 'byes resolve themselves and nothing is added later.'
-                : 'It will appear here once the organizers have drawn it.'}
+                ? 'Draw the seeding stage first — every team plays every other once, and that '
+                  + 'table seeds this bracket. Once all of it is played, generate.'
+                : 'It will appear here once the seeding stage is finished and the organizers '
+                  + 'have drawn it.'}
             </p>
           </div>
         </Panel>
@@ -158,11 +170,87 @@ export default function Bracket() {
   );
 }
 
+// ── The seeding stage ───────────────────────────────────────────────────────
+// The table first and the fixtures under it, because the table is what the
+// stage is FOR — the fixtures are how it got there. Everyone reading this page
+// during the group stage is asking "who is seeding first", and answering that
+// below six match cards would be answering it last.
+function Seeding({ seeding, columns, onPick, canRecord, busy }) {
+  const done = seeding.done;
+  return (
+    <section className="mt-4 flex flex-col gap-3">
+      <div className="flex items-baseline gap-3 flex-wrap">
+        <h2 className="eyebrow">Seeding stage</h2>
+        <span className="text-xs text-ash">
+          {seeding.complete} of {seeding.total} played
+        </span>
+        {done
+          ? <Pill tone="good">table final</Pill>
+          : <Pill tone="quiet">in progress</Pill>}
+      </div>
+
+      <Panel className="max-w-[760px]">
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr className="text-ash border-b border-line">
+              <th className="text-left font-normal px-4 py-2 w-[38px]">#</th>
+              <th className="text-left font-normal px-2 py-2">Team</th>
+              <th className="text-right font-normal px-2 py-2 w-[54px]">W</th>
+              <th className="text-right font-normal px-2 py-2 w-[54px]">L</th>
+              {/* Games won minus games lost. It only decides anything when wins
+                  and head-to-head have both tied, which in a four-team group is
+                  common enough to be worth showing rather than explaining. */}
+              <th className="text-right font-normal px-4 py-2 w-[70px]" title="game differential">
+                +/&minus;
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {seeding.standings.map((r) => (
+              <tr key={r.teamId} className="border-b border-line/40 last:border-b-0">
+                <td className="px-4 py-2 mono text-crimson">{r.place}</td>
+                <td className="px-2 py-2 truncate">
+                  {r.team?.name || '—'}
+                  {r.team?.tag && <span className="mono text-[11px] text-ash ml-2">{r.team.tag}</span>}
+                </td>
+                <td className="px-2 py-2 mono text-right">{r.won}</td>
+                <td className="px-2 py-2 mono text-right text-ash">{r.lost}</td>
+                <td className={`px-4 py-2 mono text-right ${r.diff > 0 ? 'text-verdigris' : r.diff < 0 ? 'text-oxblood' : 'text-ash'}`}>
+                  {r.diff > 0 ? `+${r.diff}` : r.diff}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="px-4 py-2.5 border-t border-line text-[11.5px] text-ash leading-relaxed">
+          {done
+            ? 'This is the final table — these places are the bracket seeds.'
+            : 'Places become the bracket seeds once every fixture is played.'}
+          {' '}Ties are broken by the matches between the tied teams, then game
+          difference, then draft seed.
+        </div>
+      </Panel>
+
+      <Half
+        title="Fixtures"
+        columns={columns}
+        onPick={onPick}
+        canRecord={canRecord}
+        busy={busy}
+        tone="seeding"
+      />
+    </section>
+  );
+}
+
 // ── One half of the bracket ─────────────────────────────────────────────────
 // Scrolls horizontally on its own rather than scrolling the page: a sixteen-team
 // bracket is six columns wide and the page around it should stay put.
 function Half({ title, columns, onPick, canRecord, busy, tone = 'winner' }) {
-  const edge = { winner: 'border-line', loser: 'border-oxblood/40', gf: 'border-crimson/40' }[tone];
+  const edge = {
+    winner: 'border-line', loser: 'border-oxblood/40',
+    gf: 'border-crimson/40', seeding: 'border-line',
+  }[tone];
   return (
     <section>
       <h2 className="eyebrow mb-2">{title}</h2>
@@ -314,13 +402,34 @@ function Controls({ state, onDone, setBanner }) {
         )}
 
         <div className="flex items-end gap-2 flex-wrap">
+          {/* The seeding stage comes first and is drawn from draft order, so it
+              can go out the moment the draft ends. */}
+          <Button
+            variant={state?.seeding?.exists ? 'ghost' : 'good'}
+            disabled={busy || state?.counts?.complete > 0}
+            onClick={() => call('seeding', () => api.post('/api/organizer/bracket/seeding'))}
+          >
+            {busy === 'seeding'
+              ? 'Drawing…'
+              : state?.seeding?.exists ? 'Redraw seeding stage' : 'Draw seeding stage'}
+          </Button>
+
           <Button
             variant={state?.exists ? 'ghost' : 'good'}
-            disabled={busy || (state?.exists && !state?.canGenerate)}
+            disabled={busy || !state?.seeding?.done || (state?.exists && !state?.canGenerate)}
             onClick={() => call('generate', () => api.post('/api/organizer/bracket/generate'))}
           >
             {busy === 'generate' ? 'Drawing…' : state?.exists ? 'Redraw bracket' : 'Generate bracket'}
           </Button>
+
+          {/* Said before the click rather than as a 409 after it. */}
+          {state?.seeding?.exists && !state.seeding.done && (
+            <span className="text-xs text-ash self-center">
+              {state.seeding.total - state.seeding.complete} seeding{' '}
+              {state.seeding.total - state.seeding.complete === 1 ? 'match' : 'matches'} left —
+              the bracket is seeded from the final table.
+            </span>
+          )}
 
           {state?.exists && (
             <Button

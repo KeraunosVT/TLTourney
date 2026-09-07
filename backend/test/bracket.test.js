@@ -1,4 +1,5 @@
-// Double elimination, with a reset.
+// Double elimination — since migration 026, with a SEEDING STAGE in front of it
+// and no reset behind it.
 //
 // A bracket is the worst possible place for a quiet bug. It runs to completion,
 // it produces a champion, and the only evidence that it was wrong is a team who
@@ -12,7 +13,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { generateBracket, applyResult, seedOrder, bracketSize, roundLabel, columns, winnersSide } = require('../../shared/bracket.cjs');
+const {
+  generateBracket, generateRoundRobin, applyResult, seedOrder, bracketSize,
+  roundLabel, columns, winnersSide,
+} = require('../../shared/bracket.cjs');
 
 // ── A tournament, played out ────────────────────────────────────────────────
 /**
@@ -75,7 +79,14 @@ function play(n, pick) {
     if (!acted) break;
   }
 
-  return { g, ms, champion, losses, played };
+  // Who lost the grand final, and whether they arrived through the winners
+  // bracket. Since 026 there is no reset, so that team goes out on ONE loss —
+  // the single exception to the invariant below, and the thing the rule change
+  // actually costs.
+  const gf = played.find((x) => x.bracket === 'GF' && x.round === 1);
+  const runnerUp = gf ? (gf.winner === gf.a ? gf.b : gf.a) : null;
+
+  return { g, ms, champion, losses, played, runnerUp };
 }
 
 // Decide matches from the bits of an integer, so a loop over 0..2^m-1 covers
@@ -89,20 +100,40 @@ const fromBits = (bits) => {
 };
 
 function assertSound(n, result, label) {
-  const { champion, losses, played } = result;
+  const { champion, losses, played, runnerUp } = result;
   assert.ok(champion, `${label}: nobody won`);
+
+  // ── The invariant, as it stands since 026 ────────────────────────────────
+  // It used to be "everyone but the champion goes out on exactly two losses",
+  // which is what double elimination MEANS. Removing the reset breaks it in
+  // exactly one place, deliberately: a team that reaches the grand final
+  // undefeated is now eliminated by a single series.
+  //
+  // So the rule is stated with that one exception NAMED rather than the
+  // assertion loosened to `<= 2`. Loosening it would have stopped catching the
+  // bug the whole file exists for — a dropper routed to the wrong slot, which
+  // shows up precisely as somebody going out a loss early.
+  let earlyExits = 0;
 
   for (let s = 1; s <= n; s++) {
     const id = `T${s}`;
     const l = losses[id] || 0;
     if (id === champion) {
-      // The champion has 0 losses, or 1 if they lost the first grand final and
-      // took the reset.
+      // 0 if they came through the winners bracket, 1 if they dropped to the
+      // losers bracket on the way and won it back.
       assert.ok(l <= 1, `${label}: champion ${id} has ${l} losses`);
+    } else if (l === 1) {
+      assert.strictEqual(id, runnerUp,
+        `${label}: ${id} went out on 1 loss and was not the beaten finalist`);
+      earlyExits += 1;
     } else {
       assert.strictEqual(l, 2, `${label}: ${id} went out on ${l} loss(es), not 2`);
     }
   }
+
+  // At most one. Two teams going out on a single loss is the old bug wearing
+  // the new rule as a disguise.
+  assert.ok(earlyExits <= 1, `${label}: ${earlyExits} teams went out on one loss`);
 
   played.forEach((p) => assert.notStrictEqual(p.a, p.b, `${label}: ${p.key} had a team play itself`));
 }
@@ -159,31 +190,27 @@ test('a two-team bracket is a legal double elimination', () => {
 });
 
 // ── The reset ───────────────────────────────────────────────────────────────
-test('the reset is played ONLY when the losers-bracket team wins the grand final', () => {
-  // Both halves matter. A reset that never fires robs the losers team of the
-  // second life the whole format promised; one that always fires makes the
-  // winners team play a decider they had already won.
-  let withReset = 0;
-  let without = 0;
+test('THE GRAND FINAL ENDS IT, whoever wins — there is no reset', () => {
+  // This test used to assert the opposite: that a losers-bracket win forced a
+  // reset. 026 removed the reset, so the property worth guarding flipped, and
+  // the half that matters now is that the tournament ENDS either way. The
+  // failure this catches is a grand final that decides nothing — no champion,
+  // nothing advanced, a bracket sitting finished-but-not-finished.
+  let lbWins = 0;
+  let wbWins = 0;
 
   for (let bits = 0; bits < (1 << 15); bits++) {
     const r = play(8, fromBits(bits));
     const gf1 = r.ms.find((m) => m.key === 'GF1-0');
-    const gf2 = r.ms.find((m) => m.key === 'GF2-0');
-    const lbChampWon = gf1.winner_team_id === gf1.team_b_id;
+    assert.ok(!r.ms.some((m) => m.key === 'GF2-0'), `bits=${bits}: a reset match was generated`);
 
-    if (lbChampWon) {
-      withReset += 1;
-      assert.ok(gf2.winner_team_id, `bits=${bits}: losers team won GF1 but no reset was played`);
-      assert.strictEqual(r.champion, gf2.winner_team_id);
-    } else {
-      without += 1;
-      assert.strictEqual(gf2.team_a_id, null, `bits=${bits}: reset was populated when it should not be`);
-      assert.strictEqual(r.champion, gf1.winner_team_id);
-    }
+    // Whoever won it is the champion, full stop.
+    assert.strictEqual(r.champion, gf1.winner_team_id, `bits=${bits}`);
+
+    if (gf1.winner_team_id === gf1.team_b_id) lbWins += 1; else wbWins += 1;
   }
 
-  assert.ok(withReset > 0 && without > 0, 'both outcomes must actually occur');
+  assert.ok(lbWins > 0 && wbWins > 0, 'both outcomes must actually occur');
 });
 
 // ── Cross-placement ─────────────────────────────────────────────────────────
@@ -321,7 +348,13 @@ test('rounds are named the way people say them', () => {
   assert.strictEqual(name('L4-0'), 'Losers Final');
   assert.strictEqual(name('L3-0'), 'Losers Semi-final');
   assert.strictEqual(name('GF1-0'), 'Grand Final');
-  assert.strictEqual(name('GF2-0'), 'Grand Final — Reset');
+
+  // The seeding stage names its own rounds. There is no "final" in a group —
+  // the last round is called that only so a schedule reads as finite.
+  const rr = generateRoundRobin(4);
+  const rrName = (key) => roundLabel(rr.matches.find((m) => m.key === key), { seedingRounds: rr.rounds });
+  assert.strictEqual(rrName('RR1-0'), 'Seeding — Round 1');
+  assert.strictEqual(rrName('RR3-0'), 'Seeding — Final Round');
 });
 
 test('columns come out in round order with void matches left out', () => {

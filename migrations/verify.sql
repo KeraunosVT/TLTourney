@@ -8,6 +8,33 @@
 --
 -- Add a row here whenever a migration adds a table, column, function or
 -- constraint, so this stays the single answer to "did that one land?".
+--
+-- ── ONE RULE FOR NEW ROWS, and it is not obvious ────────────────────────────
+-- A check that names a column DIRECTLY fails at PARSE time when that column is
+-- missing, and a parse error aborts the WHOLE sweep — so the one situation
+-- this file exists for, a half-applied database, is the one where it returns
+-- nothing at all instead of a list of what is missing. It reported
+-- `column "streams" does not exist` and not one of the other 111 rows.
+--
+-- So a check that reads DATA out of a column added by a migration is written
+-- in two parts:
+--
+--   select 'NNN · the thing',
+--          exists (select 1 from information_schema.columns
+--                  where table_schema = 'public' and table_name = 'x'
+--                    and column_name = 'y')
+--          and not exists (select 1 from x t where to_jsonb(t)->>'y' ...)
+--
+-- `to_jsonb(t)->>'y'` parses whether or not the column exists (it is a lookup
+-- in a jsonb value, not a column reference) and comes back NULL when it does
+-- not, and the guard in front turns that into a plain `false` rather than a
+-- vacuous `true`. Checks that only read the CATALOG — information_schema,
+-- pg_constraint, pg_indexes, to_regclass — need none of this and stay as they
+-- are.
+--
+-- A missing TABLE has no such workaround: nothing lets you name a table that
+-- is not there. Those checks live at the bottom of the file as queries to run
+-- by hand once the migration is applied.
 
 select '001 · tournaments table' as item,
        to_regclass('public.tournaments') is not null as ok
@@ -555,20 +582,31 @@ union all
 -- 021 set 4/10/4; 024 moved two seats from damage to healing. The composition
 -- is asserted there instead, since that is the migration that owns it now.
 select '024 · the running bench is 4 tank, 8 dps, 6 healer',
-       (select (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'Tank') = 4
-           and (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'DPS') = 8
-           and (select count(*) from jsonb_array_elements_text(sub_slots) s where s = 'Healer') = 6
-          from tournaments where status <> 'complete' order by created_at limit 1)
+       coalesce((select
+              (select count(*) from jsonb_array_elements_text(to_jsonb(t)->'sub_slots') s
+                where s = 'Tank') = 4
+          and (select count(*) from jsonb_array_elements_text(to_jsonb(t)->'sub_slots') s
+                where s = 'DPS') = 8
+          and (select count(*) from jsonb_array_elements_text(to_jsonb(t)->'sub_slots') s
+                where s = 'Healer') = 6
+         from tournaments t where t.status <> 'complete'
+         order by t.created_at limit 1), false)
 union all
 -- The cap is enforced in backend/draft.js, so nothing here prevents an
 -- over-drafted roster — but 024 can land on a team that went over under the
 -- OLD numbers, and those rosters need a manual fix rather than another pick.
 -- This is how you find them.
+-- Scoped to the RUNNING season. An archived tournament was played under
+-- whatever numbers applied then, and failing this row for a season that is
+-- already over would be a permanent red line nobody can clear.
 select '024 · no team is over a role ceiling',
        not exists (
          select 1 from team_players r
+           join teams tm on tm.id = r.team_id
+           join tournaments o on o.id = tm.tournament_id
            join player_signups p on p.id = r.signup_id
           where p.role is not null
+            and o.status <> 'complete'
           group by r.team_id, p.role
          having (p.role = 'Tank' and count(*) > 20)
              or (p.role = 'DPS' and count(*) > 31)
@@ -578,7 +616,11 @@ union all
 -- bench is edited through a different field: a bench slot naming a role no
 -- signup can hold is a seat that stays empty forever.
 select '021 · the bench says Healer, not Support',
-       (select sub_slots::text not like '%Support%' from tournaments order by created_at limit 1)
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'tournaments'
+                 and column_name = 'sub_slots')
+       and not exists (select 1 from tournaments t
+                        where to_jsonb(t)->>'sub_slots' like '%Support%')
 union all
 -- ── 022 ────────────────────────────────────────────────────────────────────
 select '022 · team_party_slots table',
@@ -595,25 +637,6 @@ union all
 select '022 · a seated player is on the roster (FK, cascading)',
        exists (select 1 from pg_constraint where conname = 'party_slots_on_the_roster')
 union all
--- What that FK guarantees, proven rather than assumed. Should be zero always.
-select '022 · nobody is seated who is not on the roster',
-       not exists (select 1 from team_party_slots s
-                   where not exists (select 1 from team_players r
-                                      where r.team_id = s.team_id
-                                        and r.signup_id = s.signup_id))
-union all
--- A seating pointing at a seat the template does not have renders nowhere and
--- is invisible in the UI — the one corruption the constraints cannot catch,
--- because party_template can be resized after a comp is built.
-select '022 · every seating points at a seat the template still has',
-       not exists (
-         select 1 from team_party_slots s
-           join teams t on t.id = s.team_id
-           join tournaments o on o.id = t.tournament_id
-          where s.party_index >= jsonb_array_length(o.party_template)
-             or s.slot_index >= jsonb_array_length(
-                  o.party_template->s.party_index->'slots'))
-union all
 -- ── 023 ────────────────────────────────────────────────────────────────────
 select '023 · tournaments.streams exists and is an array',
        exists (select 1 from pg_constraint where conname = 'tournaments_streams_is_array')
@@ -623,5 +646,102 @@ union all
 -- https in here is a live `javascript:` href waiting to be clicked. The API
 -- refuses them (shared/streams.cjs); this proves nothing got in another way.
 select '023 · every stream link is https',
-       not exists (select 1 from tournaments, jsonb_array_elements(streams) s
-                    where s->>'url' is null or s->>'url' not like 'https://%');
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'tournaments'
+                 and column_name = 'streams')
+       and not exists (select 1 from tournaments t,
+                            jsonb_array_elements(to_jsonb(t)->'streams') s
+                        where s->>'url' is null or s->>'url' not like 'https://%')
+union all
+-- ── 025 ────────────────────────────────────────────────────────────────────
+select '025 · teams.discord_url exists',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'teams'
+                 and column_name = 'discord_url')
+union all
+select '025 · the https constraint is on it',
+       exists (select 1 from pg_constraint where conname = 'teams_discord_url_https')
+union all
+-- THE one that matters, and the reason the host is checked in code rather than
+-- left to the CHECK above. This link is sent BY THE BOT to a player who has
+-- just been drafted and is expecting the message — the most trusted link this
+-- app emits. Anything that is not a Discord invite in this column is a
+-- phishing link with the tournament's name on it.
+--
+-- Mirrors shared/invites.cjs: discord.gg with a path, or discord.com and
+-- discordapp.com under /invite/. Deliberately anchored with '://' so
+-- 'https://discord.gg.evil.com/x' fails here the way it fails there.
+select '025 · every team invite is a real Discord invite',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'teams'
+                 and column_name = 'discord_url')
+       and not exists (
+         select 1 from teams t
+          where to_jsonb(t)->>'discord_url' is not null
+            and to_jsonb(t)->>'discord_url' !~ '^https://([a-z0-9-]+\.)*discord\.gg/.+'
+            and to_jsonb(t)->>'discord_url' !~ '^https://([a-z0-9-]+\.)*discord(app)?\.com/invite/.+')
+union all
+-- Not a schema fact — a READINESS one, and the row to look at before a draft
+-- rather than after. A team with no invite still drafts; its players just get
+-- the DM without a link, and nobody finds out until somebody asks where to go.
+-- Reads false with the team named in the query below it.
+select '025 · every team in the running season has an invite',
+       exists (select 1 from information_schema.columns
+               where table_schema = 'public' and table_name = 'teams'
+                 and column_name = 'discord_url')
+       and not exists (
+         select 1 from teams t
+           join tournaments o on o.id = t.tournament_id
+          where o.status <> 'complete' and to_jsonb(t)->>'discord_url' is null);
+
+-- ── The two that name names ─────────────────────────────────────────────────
+-- The checks above are booleans, which is right for a pass/fail sweep and
+-- useless once something reads false. Run these to find out WHICH.
+--
+-- Teams and their invites — 025's seed matches on NAME, so a renamed or
+-- mistyped team is silent up there and obvious here:
+--
+--   select t.seed, t.name, coalesce(t.discord_url, '— none —') as invite
+--     from teams t
+--     join tournaments o on o.id = t.tournament_id
+--    where o.status <> 'complete'
+--    order by t.seed nulls last;
+--
+-- Rosters against the 024 ceilings — Tank 20, DPS 31, Healer 27:
+--
+--   select tm.name, p.role, count(*) as have
+--     from team_players r
+--     join teams tm on tm.id = r.team_id
+--     join tournaments o on o.id = tm.tournament_id
+--     join player_signups p on p.id = r.signup_id
+--    where o.status <> 'complete' and p.role is not null
+--    group by tm.name, p.role
+--    order by tm.name, p.role;
+
+-- ── 022's data checks, run separately ───────────────────────────────────────
+-- These two name team_party_slots directly, and a query naming a table that
+-- does not exist fails at PARSE time — it would abort the whole sweep above
+-- rather than reading false, which is exactly backwards for a file whose job
+-- is reporting on a half-applied database. A missing COLUMN can be worked
+-- around (see the to_jsonb guards above); a missing TABLE cannot.
+--
+-- So they live here. Run them once 022 has been applied; both should be empty.
+--
+-- Anybody seated who is not on the roster. The foreign key makes this
+-- impossible, and this is how you prove it rather than assume it:
+--
+--   select s.* from team_party_slots s
+--    where not exists (select 1 from team_players r
+--                       where r.team_id = s.team_id and r.signup_id = s.signup_id);
+--
+-- Seatings pointing at a slot the template no longer has — the one corruption
+-- the constraints cannot catch, because party_template can be resized after a
+-- comp is built. These render nowhere and are invisible in the UI:
+--
+--   select t.name, s.party_index + 1 as party, s.slot_index + 1 as seat
+--     from team_party_slots s
+--     join teams t on t.id = s.team_id
+--     join tournaments o on o.id = t.tournament_id
+--    where s.party_index >= jsonb_array_length(o.party_template)
+--       or s.slot_index >= jsonb_array_length(
+--            o.party_template->s.party_index->'slots');

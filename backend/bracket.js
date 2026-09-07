@@ -9,7 +9,9 @@
 // line that can only be tested with a database.
 const express = require('express');
 const { supabase, currentTournament, audit } = require('./db');
-const { generateBracket, applyResult, roundLabel } = require('../shared/bracket.cjs');
+const {
+  generateBracket, generateRoundRobin, roundRobinStandings, applyResult, roundLabel,
+} = require('../shared/bracket.cjs');
 const { seriesResult, gameSlots, isBestOf } = require('../shared/series.cjs');
 const { isMap, available, isPlayable, banList, banProblem } = require('../shared/maps.cjs');
 const { classify } = require('../shared/classes.cjs');
@@ -53,6 +55,11 @@ const fromEngine = (m, tournamentId) => ({
   kind: m.status,           // the engine calls it status; here it is what KIND of match it is
   advances: m.advances || null,
   is_reset: !!m.reset,
+  // Only the grand final sets this; everything else takes the column default
+  // of 3 (migration 013). Written at generation rather than patched afterwards
+  // so a freshly drawn bracket is already correct — a best-of that is fixed up
+  // by a second statement is one that is wrong if the second statement fails.
+  ...(m.bestOf ? { best_of: m.bestOf } : {}),
 });
 
 const GAME = 'id, match_id, game_number, map, winner_team_id, scoreboard_at, decided_at, decided_by';
@@ -166,6 +173,7 @@ async function bracketState(tournamentId) {
 
   const winnersRounds = Math.max(0, ...rows.filter((r) => r.bracket === 'W').map((r) => r.round));
   const losersRounds = Math.max(0, ...rows.filter((r) => r.bracket === 'L').map((r) => r.round));
+  const seedingRounds = Math.max(0, ...rows.filter((r) => r.bracket === 'RR').map((r) => r.round));
 
   const matches = rows
     // Void matches are structure, not events. They exist so the round
@@ -176,7 +184,7 @@ async function bracketState(tournamentId) {
       const games = gamesByMatch.get(r.id) || [];
       return {
         ...r,
-        label: roundLabel(r, { winnersRounds, losersRounds }),
+        label: roundLabel(r, { winnersRounds, losersRounds, seedingRounds }),
         team_a: byId.get(r.team_a_id) || null,
         team_b: byId.get(r.team_b_id) || null,
         winner: byId.get(r.winner_team_id) || null,
@@ -195,10 +203,37 @@ async function bracketState(tournamentId) {
   const decider = gf2?.status === 'complete' ? gf2 : (gf2?.team_a_id ? null : gf1);
   const champion = decider?.status === 'complete' ? byId.get(decider.winner_team_id) || null : null;
 
+  // The seeding table, computed on every read and stored nowhere.
+  //
+  // Deliberately derived: a standings row that is written down is a second
+  // answer to a question the results already answer, and it is the one that
+  // goes stale the moment an organizer corrects a result. This costs an O(n)
+  // pass over matches that were already in memory.
+  const seeding = rows.filter((r) => r.bracket === 'RR');
+  const standings = seeding.length
+    ? roundRobinStandings(seeding, teams, Object.fromEntries(seeding.map((r) => {
+      const games = gamesByMatch.get(r.id) || [];
+      return [r.key, {
+        a: games.filter((x) => x.winner_team_id === r.team_a_id).length,
+        b: games.filter((x) => x.winner_team_id === r.team_b_id).length,
+      }];
+    }))).map((row) => ({ ...row, team: byId.get(row.teamId) || null }))
+    : [];
+
   return {
     exists: rows.length > 0,
     winnersRounds,
     losersRounds,
+    seedingRounds,
+    // Whether the bracket can be drawn yet, answered once here rather than by
+    // three pages each counting fixtures their own way.
+    seeding: {
+      exists: seeding.length > 0,
+      total: seeding.length,
+      complete: seeding.filter((r) => r.status === 'complete').length,
+      done: seeding.length > 0 && seeding.every((r) => r.status === 'complete'),
+      standings,
+    },
     teams,
     matches,
     champion,
@@ -397,11 +432,95 @@ organizerRouter.get('/', async (req, res) => {
 });
 
 /**
- * Build the bracket from the teams' seeds.
+ * Draw the SEEDING STAGE — everyone against everyone once.
  *
- * Refused once ANY match has been played. Regenerating mid-tournament would
- * silently re-pair everybody and erase results — and the button that does it
- * sits on the same screen as the one that records them.
+ * Separate from /generate rather than a flag on it, because they happen weeks
+ * apart and mean different things: this one runs off the draft order and can be
+ * drawn the moment the draft ends, while /generate cannot run until this stage
+ * has finished and its table is final.
+ *
+ * Refused once anything has been played, for the reason /generate is: redrawing
+ * re-pairs everybody and erases results, from a button next to the one that
+ * records them.
+ */
+organizerRouter.post('/seeding', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const { data: teams, error: tErr } = await supabase
+    .from('teams').select(TEAM).eq('tournament_id', t.id)
+    .not('seed', 'is', null).order('seed', { ascending: true });
+  if (tErr) return res.status(500).json({ error: 'Could not read the teams.' });
+
+  if ((teams || []).length < 2) {
+    return res.status(409).json({ error: 'A seeding stage needs at least two seeded teams.' });
+  }
+
+  const { data: existing, error: exErr } = await supabase
+    .from('matches').select('id, key, bracket, status, decided_by, team_a_id, team_b_id, winner_team_id')
+    .eq('tournament_id', t.id);
+  if (exErr) return res.status(500).json({ error: 'Could not read the existing matches.' });
+
+  const played = (existing || []).filter((m) => m.status === 'complete' && m.decided_by !== 'bye');
+  if (played.length > 0) {
+    return res.status(409).json({
+      error: `${played.length} matches have already been played — clear them before redrawing.`,
+    });
+  }
+
+  const g = generateRoundRobin(teams.length);
+
+  if ((existing || []).length) {
+    const { error } = await supabase.from('matches').delete().eq('tournament_id', t.id);
+    if (error) return res.status(500).json({ error: 'Could not clear the old matches.' });
+  }
+
+  const rows = g.matches.map((m) => fromEngine(m, t.id));
+  const { error: insErr } = await supabase.from('matches').insert(rows);
+  if (insErr) {
+    // The one predictable failure: 026 not applied, so bracket='RR' violates
+    // the CHECK. Say which migration rather than "could not write".
+    if (/matches_bracket_valid/.test(insErr.message || '')) {
+      return res.status(503).json({
+        error: 'The matches table does not allow a seeding stage yet — '
+          + 'run migrations/026_seeding_stage.sql first.',
+      });
+    }
+    console.error('seeding insert failed:', insErr.message);
+    return res.status(500).json({ error: 'Could not write the seeding stage.' });
+  }
+
+  // Both sides of every fixture are SEED slots, so the same position-based
+  // mapping the bracket uses places all of them. The seed here is only an
+  // entry number — this stage exists to decide the real one.
+  const bySeed = new Map(teams.map((x, i) => [i + 1, x.id]));
+  for (const m of g.matches) {
+    const { error } = await supabase.from('matches').update({
+      team_a_id: bySeed.get(m.a.seed) || null,
+      team_b_id: bySeed.get(m.b.seed) || null,
+      status: 'ready',
+    }).eq('tournament_id', t.id).eq('key', m.key);
+    if (error) return res.status(500).json({ error: 'Could not fill the fixtures.' });
+  }
+
+  await audit(req.user, 'bracket.seeding', null, {
+    teams: teams.length, matches: g.matches.length, rounds: g.rounds,
+  });
+  res.json({ ok: true, ...(await bracketState(t.id)) });
+});
+
+/**
+ * Build the bracket from the SEEDING TABLE.
+ *
+ * Since 026 the seeds are earned rather than inherited: bracket position comes
+ * from the round-robin standings, not from teams.seed, which is draft order and
+ * was decided before anybody played. teams.seed survives only as the last
+ * tiebreak inside the standings.
+ *
+ * Refused once ANY bracket match has been played. Regenerating mid-tournament
+ * would silently re-pair everybody and erase results — and the button that does
+ * it sits on the same screen as the one that records them.
  */
 organizerRouter.post('/generate', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
@@ -418,7 +537,8 @@ organizerRouter.post('/generate', async (req, res) => {
   }
 
   const { data: existing, error: exErr } = await supabase
-    .from('matches').select('key, status, decided_by').eq('tournament_id', t.id);
+    .from('matches').select('id, key, bracket, status, decided_by, team_a_id, team_b_id, winner_team_id')
+    .eq('tournament_id', t.id);
   if (exErr) {
     if (/schema cache|does not exist|relation/i.test(exErr.message)) {
       return res.status(503).json({
@@ -428,11 +548,35 @@ organizerRouter.post('/generate', async (req, res) => {
     return res.status(500).json({ error: 'Could not read the existing bracket.' });
   }
 
+  // ── The seeding stage has to be FINISHED ────────────────────────────────
+  // Drawing off a half-played table seeds the bracket from results that are
+  // still changing, and the bracket is what everything downstream is built on.
+  // Counted rather than assumed: an unplayed fixture is the difference between
+  // seed 1 and seed 3.
+  const seedingMatches = (existing || []).filter((m) => m.bracket === 'RR');
+  const seedingLeft = seedingMatches.filter((m) => m.status !== 'complete');
+  if (seedingMatches.length === 0) {
+    return res.status(409).json({
+      error: 'There is no seeding stage yet. Draw it first — the bracket is seeded from its table.',
+    });
+  }
+  if (seedingLeft.length > 0) {
+    return res.status(409).json({
+      error: `${seedingLeft.length} seeding ${seedingLeft.length === 1 ? 'match has' : 'matches have'} `
+        + 'not been played. The bracket is seeded from the final table.',
+    });
+  }
+
   // A BYE IS NOT A PLAYED MATCH. Generating settles the walkovers on the way
   // out, which marks them complete — so counting completed matches read a
   // freshly drawn bracket as one that had already been played, and refused to
   // redraw it. Nobody had played anything.
-  const played = (existing || []).filter((m) => m.status === 'complete' && m.decided_by !== 'bye');
+  //
+  // Seeding matches are excluded outright: they are SUPPOSED to be played
+  // before this runs, and counting them would make the check refuse every
+  // bracket it exists to allow.
+  const played = (existing || []).filter((m) => m.bracket !== 'RR'
+    && m.status === 'complete' && m.decided_by !== 'bye');
   if (played.length > 0) {
     return res.status(409).json({
       error: `${played.length} matches have already been played — the bracket cannot be regenerated. `
@@ -440,13 +584,41 @@ organizerRouter.post('/generate', async (req, res) => {
     });
   }
 
+  // Game wins per seeding match, for the standings' differential tiebreak. Read
+  // here rather than folded into the match query because games live in their own
+  // table; a tournament that records only series winners still gets a table, it
+  // just leans harder on head-to-head and the draft seed below the differential.
+  let gameWins = {};
+  try {
+    const byMatch = await readGames(t.id);
+    const idToKey = new Map((existing || []).map((m) => [m.id, m.key]));
+    for (const [matchId, games] of byMatch) {
+      const key = idToKey.get(matchId);
+      const row = (existing || []).find((m) => m.id === matchId);
+      if (!key || !row) continue;
+      gameWins[key] = {
+        a: games.filter((x) => x.winner_team_id && x.winner_team_id === row.team_a_id).length,
+        b: games.filter((x) => x.winner_team_id && x.winner_team_id === row.team_b_id).length,
+      };
+    }
+  } catch (err) {
+    // Not fatal. A missing games table means no differential, not no bracket.
+    console.warn(`seeding differential unavailable: ${err.message}`);
+    gameWins = {};
+  }
+
   const g = generateBracket(teams.length);
 
   // Replace wholesale rather than upsert. A bracket half-built from an old team
   // count and half from a new one is the worst possible state, and the only way
   // to be sure it cannot happen is for the old one not to be there.
-  if ((existing || []).length) {
-    const { error } = await supabase.from('matches').delete().eq('tournament_id', t.id);
+  //
+  // NOT the seeding stage, which this bracket is seeded FROM — deleting it here
+  // would erase the six results that decided the seeds a line later, and the
+  // bracket would come out of an empty table.
+  if ((existing || []).some((m) => m.bracket !== 'RR')) {
+    const { error } = await supabase.from('matches').delete()
+      .eq('tournament_id', t.id).neq('bracket', 'RR');
     if (error) return res.status(500).json({ error: 'Could not clear the old bracket.' });
   }
 
@@ -467,7 +639,17 @@ organizerRouter.post('/generate', async (req, res) => {
   // a bracket that generated without error and had nobody in it.
   //
   // The mock bracket caught this on its first run, with teams seeded 9000+.
-  const bySeed = new Map(teams.map((x, i) => [i + 1, x.id]));
+  //
+  // Since 026 the POSITIONS come from the seeding table rather than from draft
+  // order. `place` is 1..n by construction, which is exactly what the engine's
+  // SEED(n) slots expect, so the mapping below is unchanged in shape — only
+  // where the ordering comes from has moved.
+  const table = roundRobinStandings(
+    (existing || []).filter((m) => m.bracket === 'RR'),
+    teams,
+    gameWins,
+  );
+  const bySeed = new Map(table.map((r) => [r.place, r.teamId]));
   for (const m of g.matches) {
     const fields = {};
     if (m.a.type === 'seed' && bySeed.has(m.a.seed)) fields.team_a_id = bySeed.get(m.a.seed);
