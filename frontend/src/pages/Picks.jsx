@@ -115,6 +115,12 @@ export default function Picks() {
                 live
               </span>
             )}
+            <a
+              href="/rosters"
+              className="text-xs text-ash hover:text-bone underline underline-offset-2"
+            >
+              rosters
+            </a>
             <button
               onClick={load}
               className="text-xs text-ash hover:text-bone underline underline-offset-2"

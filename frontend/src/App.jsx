@@ -12,6 +12,7 @@ import Teams from './pages/Teams';
 import Board from './pages/Board';
 import Draft from './pages/Draft';
 import Picks from './pages/Picks';
+import Rosters from './pages/Rosters';
 import Parties from './pages/Parties';
 import Comp from './pages/Comp';
 import Bracket from './pages/Bracket';
@@ -163,6 +164,11 @@ export default function App() {
                 being broadcast, and somebody following a link out of the
                 stream has no session. */}
             <Route path="/picks" element={<Picks />} />
+
+            {/* Public for the same reason: a roster is the picks added up,
+                and every pick is already public. The COMP is not — who sits
+                in which party stays behind a captain's login. */}
+            <Route path="/rosters" element={<Rosters />} />
 
             <Route element={<Gate />}>
               <Route index element={<Navigate to="/signup" replace />} />

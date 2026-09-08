@@ -813,7 +813,86 @@ organizerRouter.post('/reseed', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── The rosters, for anybody ────────────────────────────────────────────────
+// No session, like /api/stream/draft and /api/stream/bracket, and for the same
+// reason: this is the thing being broadcast and somebody following a link out
+// of the stream has no cookie.
+//
+// Rosters are not secret — every pick that built them is already public on
+// /picks, and a roster is just the picks added up. What IS secret is the comp
+// (backend/parties.js): who sits in which party is tactical while a tournament
+// is running, and this route deliberately says nothing about it.
+//
+// The redaction is the same line the draft's feed draws. `casting` there strips
+// Discord identity; this strips it here, because rostersByTeam embeds
+// discord_id and discord_username for the captain-facing pages that need them.
+const streamRouter = express.Router();
+
+const shownMember = (m) => ({
+  id: m.id,
+  player_name: m.player_name,
+  role: m.role,
+  classes: m.classes,
+  // How they got here — the page marks captains with a star, and a drafted
+  // player's pick number is worth showing beside their name.
+  via: m.via,
+  draft_round: m.draft_round,
+  draft_pick: m.draft_pick,
+  // On the roster and not taking the field (migration 028). Published so the
+  // page can say so rather than showing a team of 66 that fields 65.
+  playing: m.playing !== false,
+});
+
+// One read however many people are watching — the same trick the draft and
+// bracket cast routes use. Rosters change on a pick, so a few seconds is
+// plenty and the page does not poll hard.
+const ROSTER_CAST_MS = 5000;
+let rosterCache = null;
+
+streamRouter.get('/', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.json({ tournament: null, teams: [] });
+
+  try {
+    if (!rosterCache || rosterCache.id !== t.id || Date.now() - rosterCache.at > ROSTER_CAST_MS) {
+      const job = (async () => {
+        const [teamsRes, rosters, byCaptain] = await Promise.all([
+          supabase.from('teams').select('id, name, tag, seed').eq('tournament_id', t.id)
+            .order('seed', { ascending: true, nullsFirst: false }),
+          rostersByTeam(t.id),
+          captainsByTeam(t.id),
+        ]);
+        if (teamsRes.error) throw new Error(teamsRes.error.message);
+
+        return {
+          tournament: { name: t.name, status: t.status, rosterSize: t.roster_size },
+          teams: (teamsRes.data || []).map((x) => {
+            const members = (rosters.get(x.id) || []).map(shownMember);
+            return {
+              ...x,
+              captains: (byCaptain.get(x.id) || []).map((c) => c.player_name),
+              members,
+              // Counted here so four pages do not each count them their own
+              // way. Non-playing members are OUT of the role tallies for the
+              // reason rosterProgress leaves them out: they are on the roster
+              // and not in the game.
+              progress: rosterProgress(rosters.get(x.id) || [], t.roster_size),
+            };
+          }),
+        };
+      })();
+      rosterCache = { id: t.id, at: Date.now(), job };
+    }
+    res.json(await rosterCache.job);
+  } catch (err) {
+    rosterCache = null;
+    console.error('roster cast failed:', err.message);
+    res.status(500).json({ error: 'Could not read the rosters.' });
+  }
+});
+
 module.exports = {
-  publicRouter, organizerRouter, readiness, conflictMessage,
+  publicRouter, organizerRouter, streamRouter, readiness, conflictMessage,
   captainCandidates, captaincyFor, captainsByTeam, rostersByTeam, rosteredIds, addToRoster,
 };

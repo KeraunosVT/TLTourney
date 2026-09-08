@@ -111,6 +111,9 @@ const streamLimiter = rateLimit({
 });
 app.use('/api/stream/draft', streamLimiter, draft.publicRouter);
 app.use('/api/stream/bracket', streamLimiter, bracket.streamRouter);
+// Rosters are public because the picks that built them already are — see the
+// note above teams.streamRouter. Comps are NOT, and live behind a session.
+app.use('/api/stream/rosters', streamLimiter, teams.streamRouter);
 
 // ── Everything below needs a session ────────────────────────────────────────
 app.use('/api', requireAuth);
