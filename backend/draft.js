@@ -75,6 +75,13 @@ const PLAYER = 'id, player_name, discord_username, role, classes, positions, nig
 // `id` is not decoration: the pool is filtered against the rostered set, so
 // counting requires knowing WHICH rows, not how many.
 const POOL_COUNTS = 'id, role';
+
+// A player as a PICK FEED shows them. `casting` below already strips notes,
+// nights and discord_username before anything is sent — this stops them being
+// read in the first place. It matters most on /picks, which reads every pick in
+// the tournament at once: `notes` is free text somebody wrote about their shift
+// pattern, and 257 of those were being fetched and dropped.
+const FEED_PLAYER = 'id, player_name, role, classes, wants_shotcall';
 const TEAM = 'id, name, tag, seed';
 
 const ordinal = (n) => {
@@ -779,11 +786,11 @@ async function assembleState(t, d) {
     supabase.from('teams').select(TEAM).eq('tournament_id', t.id)
       .order('seed', { ascending: true, nullsFirst: false }),
     supabase.from('draft_picks')
-      .select(`pick_number, round, team_id, auto, made_by, created_at, player:player_signups (${PLAYER})`)
+      .select(`pick_number, round, team_id, auto, made_by, created_at, player:player_signups (${FEED_PLAYER})`)
       .eq('tournament_id', t.id)
       .order('pick_number', { ascending: false }).limit(20),
     captainsByTeam(t.id),
-    rostersByTeam(t.id),
+    cachedRosters(t.id),
   ]);
 
   if (teamsRes.error) throw new Error(`draft teams read failed: ${teamsRes.error.message}`);
@@ -917,6 +924,36 @@ const snapshots = new Map();
 const pickLists = new Map();
 const PICKS_MS = 5000;
 
+// ── The rosters, cached against the thing that actually changes them ─────────
+// THE BIGGEST READ IN THE APP, and it was being re-fetched every 1.2 seconds.
+//
+// The snapshot's TTL is short because the CLOCK is short: current_pick and the
+// deadline have to be current to the second. Rosters do not — they change when
+// a pick lands, and nothing else can touch them mid-draft (seating a captain
+// and adding a player by hand are both refused while a draft is live). So the
+// short TTL was being applied to the one thing in the payload that changes
+// every minute or two rather than every second.
+//
+// Cleared by invalidate(), which every pick, undo and reset already calls, so
+// this is not "stale for 30 seconds" — it is exact, with a TTL only as a
+// backstop for the paths outside the draft that can add a roster row.
+//
+// During a live draft this turns ~3000 full roster reads an hour into one per
+// pick: roughly thirty.
+const rosterLists = new Map();
+const ROSTERS_MS = 30000;
+
+async function cachedRosters(tournamentId) {
+  const hit = rosterLists.get(tournamentId);
+  if (hit && Date.now() - hit.at < ROSTERS_MS) return hit.job;
+
+  const job = rostersByTeam(tournamentId);
+  rosterLists.set(tournamentId, { at: Date.now(), job });
+  // A failed read must not be cached as an answer.
+  job.catch(() => rosterLists.delete(tournamentId));
+  return job;
+}
+
 function invalidate(tournamentId) {
   snapshots.delete(tournamentId);
   // Both, always. A pick changes who is available, and a stale full pool would
@@ -924,6 +961,9 @@ function invalidate(tournamentId) {
   pools.delete(tournamentId);
   // And the history, which grows by one on every pick.
   pickLists.delete(tournamentId);
+  // And the rosters, which gain a member on every pick. This is what makes the
+  // 30-second TTL above a backstop rather than a staleness window.
+  rosterLists.delete(tournamentId);
 }
 
 async function snapshot(t, d) {
@@ -1116,7 +1156,7 @@ publicRouter.get('/picks', async (req, res) => {
         // "who went first" is the question, and a reversed list makes the
         // reader do the arithmetic to find pick 1.
         supabase.from('draft_picks')
-          .select(`pick_number, round, team_id, auto, made_by, created_at, player:player_signups (${PLAYER})`)
+          .select(`pick_number, round, team_id, auto, made_by, created_at, player:player_signups (${FEED_PLAYER})`)
           .eq('tournament_id', t.id)
           .order('pick_number', { ascending: true }),
         liveDraft(t),

@@ -77,8 +77,16 @@ const withCaptains = (teams, byTeam) =>
   teams.map((t) => ({ ...t, captains: byTeam.get(t.id) || [] }));
 
 // Everybody on a roster in this tournament, keyed by team.
+// Deliberately NARROW. This is read on every draft poll for every team, so
+// every column here is paid for hundreds of times an hour.
+//
+// discord_id, discord_username and positions were all in this select and NONE
+// of them is rendered off a roster member anywhere — positions is used only on
+// the POOL (PoolPanel's filter), and the Discord fields only by the DM paths,
+// which read captains through CAPTAIN_ROWS instead. Roughly a third of the
+// bytes, fetched and discarded.
 const ROSTER_ROWS = `team_id, via, playing, draft_round, draft_pick, player:player_signups (
-  id, player_name, discord_id, discord_username, role, classes, positions
+  id, player_name, role, classes
 )`;
 
 async function rostersByTeam(tournamentId) {
