@@ -800,6 +800,31 @@ select '030 · touch_updated_at has a pinned search_path',
                   and p.proconfig is not null
                   and array_to_string(p.proconfig, ',') like '%search_path%')
 union all
+-- ── 031 ────────────────────────────────────────────────────────────────────
+-- rls_auto_enable is an EVENT TRIGGER function, not an RPC. The API roles never
+-- needed to call it — an event trigger is fired by the trigger manager and does
+-- not consult EXECUTE — so this is the grant going away, not a capability.
+select '031 · the API roles cannot execute rls_auto_enable',
+       not exists (
+         select 1 from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           join pg_roles r on r.rolname in ('anon', 'authenticated')
+          where n.nspname = 'public' and p.proname = 'rls_auto_enable'
+            and has_function_privilege(r.oid, p.oid, 'EXECUTE'))
+union all
+-- And the trigger it belongs to is still armed. This is the half that MATTERS:
+-- revoking the grant must not have been mistaken for disabling the thing, and a
+-- function with no trigger attached has never been enabling RLS on anything.
+-- Reads true when there is no such function at all, so a database that never
+-- had it is not failed for it — the RLS row below is the real test either way.
+select '031 · rls_auto_enable is still attached to an event trigger',
+       not exists (select 1 from pg_proc p
+                     join pg_namespace n on n.oid = p.pronamespace
+                    where n.nspname = 'public' and p.proname = 'rls_auto_enable')
+       or exists (select 1 from pg_event_trigger e
+                    join pg_proc p on p.oid = e.evtfoid
+                   where p.proname = 'rls_auto_enable' and e.evtenabled <> 'D')
+union all
 -- ── The one that is not about a migration ──────────────────────────────────
 -- EVERY PUBLIC TABLE SHOULD HAVE RLS ENABLED, and this app makes that free.
 --

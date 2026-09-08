@@ -1,0 +1,58 @@
+-- 031_rls_auto_enable_grants.sql — take EXECUTE on rls_auto_enable away from
+-- the public API roles.
+--
+-- Run in the Supabase SQL editor AFTER 030. Safe to re-run.
+--
+-- Supabase's linter raises two warnings against public.rls_auto_enable():
+--   0028 anon can execute it as SECURITY DEFINER via /rest/v1/rpc/
+--   0029 authenticated can too
+--
+-- ── What the function is ────────────────────────────────────────────────────
+-- Not one of ours — nothing in migrations/ creates it and nothing in the app
+-- calls it. It is an EVENT TRIGGER function that enables row level security on
+-- every table created in `public`, which is why the tables added by 022 and 027
+-- came out with RLS already on.
+--
+-- Worth keeping. This app reaches Supabase only through the service key, which
+-- bypasses RLS, so RLS costs it nothing and is the only thing standing between
+-- the public PostgREST endpoint and every row in the database. A function that
+-- guarantees no future table is ever created without it is doing real work.
+--
+-- ── How dangerous the grant actually was ────────────────────────────────────
+-- Barely. The body's first statement is pg_event_trigger_ddl_commands(), which
+-- Postgres refuses to run outside a ddl_command_end event trigger — so calling
+-- it over REST raises an error before it does anything, and there is nothing
+-- else in it to abuse. Its search_path is already pinned to pg_catalog.
+--
+-- Revoked anyway, because the grant buys nothing: an event trigger is fired by
+-- the event trigger manager and does NOT consult EXECUTE privileges, so no role
+-- that matters loses anything. A permanently-warning linter is a linter nobody
+-- reads, and this one is two lines from silent.
+--
+-- Scoped to the two API roles rather than PUBLIC on purpose. Revoking from
+-- PUBLIC would also cover roles invented later, but it reaches further than the
+-- lint asks and further than anybody here has checked — service_role's own
+-- access to functions is not something to alter on a hunch.
+revoke execute on function public.rls_auto_enable() from anon;
+revoke execute on function public.rls_auto_enable() from authenticated;
+
+-- Check — neither API role can call it any more. Both should return no rows:
+--   select r.rolname
+--     from pg_proc p
+--     join pg_namespace n on n.oid = p.pronamespace
+--     cross join (values ('anon'), ('authenticated')) as roles(rolname)
+--     join pg_roles r on r.rolname = roles.rolname
+--    where n.nspname = 'public' and p.proname = 'rls_auto_enable'
+--      and has_function_privilege(r.rolname, p.oid, 'EXECUTE');
+--
+-- And the event trigger itself is UNTOUCHED and still armed — this is the part
+-- to confirm, because it is what keeps RLS on for future tables:
+--   select e.evtname, e.evtevent, e.evtenabled, p.proname
+--     from pg_event_trigger e
+--     join pg_proc p on p.oid = e.evtfoid
+--    where p.proname = 'rls_auto_enable';
+--
+-- evtenabled should be 'O' (enabled, origin). If that query returns NO rows the
+-- function exists with no trigger attached, in which case it has never been
+-- doing anything and new tables are NOT getting RLS — check the RLS row in
+-- verify.sql before assuming you are covered.
