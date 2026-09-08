@@ -55,6 +55,13 @@ function Shell() {
           </div>
         </div>
         <div className="flex md:flex-col gap-1 flex-1 md:flex-none">
+          {/* The public front page. `end` so it only lights up on "/" itself —
+              without it a NavLink to the root matches every route beneath it
+              and the rail shows two active items at once.
+
+              First in the rail because it is the page everything else is
+              reached from, and the one an organizer sends people to. */}
+          <NavLink to="/" end className={link}>Home</NavLink>
           <NavLink to="/signup" className={link}>Sign up</NavLink>
           {/* Shown to everyone, unlike the board. The draft is the event — a
               player who isn't a captain still wants to watch their name come
