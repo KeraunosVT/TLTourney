@@ -108,6 +108,9 @@ function Hero({ t, draft, bracket }) {
 
   if (live) return <DraftHero draft={draft} />;
   if (bracket?.champion) return <ChampionHero bracket={bracket} />;
+  // `open` comes from the same isOpen() the signup route enforces — status AND
+  // the deadline. It used to be `status === 'signups'` alone, which kept this
+  // page inviting people in after the deadline had shut the form.
   if (t?.open) return <SignupsHero t={t} />;
   return <NextMatchHero bracket={bracket} t={t} />;
 }
@@ -231,19 +234,42 @@ function NextMatchHero({ bracket, t }) {
   const byId = new Map((bracket?.teams || []).map((x) => [x.id, x]));
 
   if (!next) {
+    // Signups being SHUT is worth saying out loud, and saying WHY. Somebody who
+    // followed a link to enter needs to know whether they missed a deadline or
+    // whether this season simply is not taking entries — those are different
+    // answers, and "nothing here" is neither of them.
+    const closed = t && t.status === 'signups' && !t.open && t.deadline_passed;
+    const drafted = t?.status && t.status !== 'signups' && t.status !== 'setup';
+
     return (
       <Panel>
-        <Badge>{t?.status === 'complete' ? 'Season over' : 'Between matches'}</Badge>
+        <Badge>{t?.status === 'complete' ? 'Season over' : 'Signups are closed'}</Badge>
         <h1 className="font-display text-[34px] leading-[1.1] mt-3 max-w-[24ch]">
-          {bracket?.exists
-            ? 'No match scheduled yet.'
-            : 'The season is being set up.'}
+          {bracket?.exists ? 'No match scheduled yet.' : 'Signups are closed.'}
         </h1>
         <p className="text-[15px] text-ash mt-3 leading-relaxed max-w-[62ch]">
-          {bracket?.exists
-            ? 'The next fixture will appear here as soon as it has a time.'
-            : 'Rosters, the draft record and the bracket all appear here as the season runs.'}
+          {closed
+            ? `Entries closed ${whenLocal(t.signups_close_at)}. The pool is frozen while the teams are built.`
+            : bracket?.exists
+              ? 'The next fixture will appear here as soon as it has a time.'
+              : drafted
+                ? 'The pool is closed and the teams are being put together. Rosters and the '
+                  + 'draft record are below.'
+                : 'Rosters, the draft record and the bracket all appear here as the season runs.'}
         </p>
+        <div className="flex items-center gap-3 mt-5 flex-wrap">
+          <a href="/rosters" className="inline-flex items-center justify-center h-11 px-5 rounded
+                                        border border-line text-ash text-[14px] font-semibold
+                                        hover:text-bone hover:border-crimson transition-colors">
+            The teams
+          </a>
+          <a href={DISCORD_INVITE} target="_blank" rel="noreferrer noopener"
+             className="inline-flex items-center justify-center h-11 px-5 rounded border border-line
+                        text-ash text-[14px] font-semibold hover:text-bone hover:border-crimson
+                        transition-colors">
+            Discord — next season ↗
+          </a>
+        </div>
       </Panel>
     );
   }

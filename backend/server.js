@@ -77,7 +77,20 @@ app.get('/api/tournament', async (req, res) => {
       party_size: t.party_size,
       sub_count: t.sub_count,
       signups_close_at: t.signups_close_at,
-      open: t.status === 'signups',
+      // THE SAME FUNCTION THE SIGNUP ROUTE USES, not a second copy of the rule.
+      //
+      // This read `t.status === 'signups'` and ignored the deadline, so once
+      // signups_close_at passed the public endpoint went on announcing that
+      // signups were open while backend/signups.js correctly refused every one
+      // — the landing page invited people in and the form turned them away.
+      //
+      // isOpen is `status === 'signups' && !deadlinePassed(t)`. Two definitions
+      // of one thing is exactly what it exists to prevent.
+      open: signups.isOpen(t),
+      // Published alongside it so a page can say WHY it is shut — "the deadline
+      // passed" and "the organizers closed it" are different sentences, and a
+      // visitor deserves the right one.
+      deadline_passed: signups.deadlinePassed(t),
       // Public on purpose, and this is the route that should carry them: a
       // broadcast link is the one piece of tournament data whose whole job is
       // to be handed to people who have not signed in. This endpoint already
