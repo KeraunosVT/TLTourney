@@ -790,7 +790,36 @@ select '028 · no team is short more than one playing member',
          select 1 from team_players r
            join tournaments o on o.id = r.tournament_id
           where o.status <> 'complete' and to_jsonb(r)->>'playing' = 'false'
-          group by r.team_id having count(*) > 1);
+          group by r.team_id having count(*) > 1)
+union all
+-- ── 030 ────────────────────────────────────────────────────────────────────
+select '030 · touch_updated_at has a pinned search_path',
+       exists (select 1 from pg_proc p
+                 join pg_namespace n on n.oid = p.pronamespace
+                where n.nspname = 'public' and p.proname = 'touch_updated_at'
+                  and p.proconfig is not null
+                  and array_to_string(p.proconfig, ',') like '%search_path%')
+union all
+-- ── The one that is not about a migration ──────────────────────────────────
+-- EVERY PUBLIC TABLE SHOULD HAVE RLS ENABLED, and this app makes that free.
+--
+-- Nothing here ever talks to Supabase as `anon` or `authenticated`: the browser
+-- talks to the Express backend, and the backend uses the SERVICE key, which
+-- bypasses RLS entirely. So enabling RLS costs this application nothing at all
+-- and is the only thing standing between the public PostgREST endpoint and
+-- every row in the database.
+--
+-- A table with RLS on and no policies is exactly right here: the service key
+-- still reads and writes it, and anon gets nothing.
+select '· every public table has RLS enabled',
+       not exists (
+         select 1 from pg_tables t
+          where t.schemaname = 'public'
+            and not exists (
+              select 1 from pg_class c
+                join pg_namespace n on n.oid = c.relnamespace
+               where n.nspname = 'public' and c.relname = t.tablename
+                 and c.relrowsecurity));
 
 -- ── The ones that name names ────────────────────────────────────────────────
 -- The checks above are booleans, which is right for a pass/fail sweep and

@@ -1,0 +1,48 @@
+-- 030_function_search_path.sql — pin touch_updated_at's search path.
+--
+-- Run in the Supabase SQL editor AFTER 029. Safe to re-run.
+--
+-- Supabase's database linter flags `function_search_path_mutable` on
+-- public.touch_updated_at: the function does not set a search_path, so it
+-- resolves unqualified names against whatever the CALLER's happens to be.
+--
+-- ── How much this actually matters here ─────────────────────────────────────
+-- Very little, and it is worth saying so rather than implying otherwise. The
+-- danger the lint exists for is a SECURITY DEFINER function running as its
+-- owner while an attacker controls name resolution — plant a `now()` in a
+-- schema earlier on the search_path and the function calls that instead.
+--
+-- touch_updated_at is neither of those things. It is SECURITY INVOKER (no
+-- `security definer` clause, so it runs as whoever fired the trigger) and its
+-- entire body is `new.updated_at = now()` — one function, from pg_catalog,
+-- which is searched before anything a user can reach regardless of the
+-- setting. There is no object here to shadow.
+--
+-- It is fixed anyway because it costs one statement, and a linter with a
+-- permanent known-ignorable warning on it is a linter people stop reading.
+--
+-- ── Why '' rather than 'public' ─────────────────────────────────────────────
+-- An empty search_path is the strict form: nothing resolves unqualified except
+-- pg_catalog, which Postgres always searches first. That is exactly what this
+-- function needs and nothing more. Setting it to 'public' would still leave the
+-- name open to anything created in public.
+--
+-- The function is NOT redefined — `alter function` changes the setting and
+-- leaves the body and every trigger hanging off it untouched. Eight triggers
+-- across the schema call this; recreating it would be a needless risk.
+alter function public.touch_updated_at() set search_path = '';
+
+-- Check — the setting is attached:
+--   select p.proname,
+--          p.prosecdef as security_definer,
+--          p.proconfig as settings
+--     from pg_proc p
+--     join pg_namespace n on n.oid = p.pronamespace
+--    where n.nspname = 'public' and p.proname = 'touch_updated_at';
+--
+-- `settings` should read {search_path=""} and security_definer should be false.
+--
+-- And the triggers still fire — update any row and watch updated_at move:
+--   update tournaments set name = name
+--    where id = (select id from tournaments order by created_at limit 1)
+--   returning name, updated_at;
