@@ -32,10 +32,18 @@ const LOSER = (of) => ({ type: 'loser', of });
 
 const keyFor = (bracket, round, idx) => `${bracket}${round}-${idx}`;
 
-// The grand final is longer than everything before it. matches.best_of defaults
-// to 3 (migration 013) and every other match takes that default; this is the one
-// place the engine overrides it.
+// matches.best_of defaults to 3 (migration 013). Two stages override it, and
+// they pull in opposite directions for the same reason — how much a series is
+// worth deciding.
+//
+// The grand final is longer than everything before it.
 const GRAND_FINAL_BEST_OF = 5;
+
+// A seeding fixture is a SINGLE GAME. Six fixtures at best-of-three is
+// eighteen games to decide a seeding order, which is more play than the
+// double-elimination bracket those seeds feed into. One game each keeps the
+// stage to six games and puts the long series where they matter.
+const SEEDING_BEST_OF = 1;
 
 // ── The seeding stage ───────────────────────────────────────────────────────
 /**
@@ -80,6 +88,7 @@ function generateRoundRobin(teamCount) {
       matches.push({
         key: keyFor('RR', r + 1, idx), bracket: 'RR', round: r + 1, idx,
         a: SEED(lo), b: SEED(hi),
+        bestOf: SEEDING_BEST_OF,
         // Every fixture is played — a round-robin has no byes and nothing to
         // void, so markByes is not run over these. Set explicitly rather than
         // left for the database default: backend/bracket.js maps this field
@@ -532,5 +541,5 @@ function columns(matches, bracket) {
 module.exports = {
   generateBracket, generateRoundRobin, roundRobinStandings,
   applyResult, seedOrder, bracketSize, roundLabel, columns, winnersSide,
-  GRAND_FINAL_BEST_OF, SEED, WINNER, LOSER, keyFor,
+  GRAND_FINAL_BEST_OF, SEEDING_BEST_OF, SEED, WINNER, LOSER, keyFor,
 };

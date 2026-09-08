@@ -9,7 +9,7 @@ const assert = require('node:assert');
 
 const {
   generateRoundRobin, roundRobinStandings, generateBracket, applyResult,
-  GRAND_FINAL_BEST_OF,
+  GRAND_FINAL_BEST_OF, SEEDING_BEST_OF,
 } = require('../../shared/bracket.cjs');
 
 // ── The fixtures ────────────────────────────────────────────────────────────
@@ -82,6 +82,33 @@ test('EVERY FIXTURE CARRIES A KIND', () => {
       assert.strictEqual(m.status, 'match', `${n} teams: ${m.key} has no kind`);
     });
   }
+});
+
+test('A SEEDING FIXTURE IS ONE GAME', () => {
+  // Six fixtures at best-of-three is eighteen games to decide a seeding order,
+  // which is more play than the bracket those seeds feed into. The whole stage
+  // is six games.
+  assert.strictEqual(SEEDING_BEST_OF, 1);
+  generateRoundRobin(4).matches.forEach((m) => {
+    assert.strictEqual(m.bestOf, 1, `${m.key} is not a single game`);
+  });
+});
+
+test('the three stages have three different lengths', () => {
+  // Seeding 1, the bracket's default 3, the grand final 5 — stated together
+  // because they are one decision about where a long series is worth playing.
+  const rr = generateRoundRobin(4).matches;
+  const b = generateBracket(4).matches;
+  assert.deepStrictEqual([...new Set(rr.map((m) => m.bestOf))], [1]);
+  assert.deepStrictEqual(
+    [...new Set(b.filter((m) => m.bracket !== 'GF').map((m) => m.bestOf))],
+    [undefined],
+    'the bracket takes the column default of 3 rather than overriding it',
+  );
+  assert.deepStrictEqual(
+    [...new Set(b.filter((m) => m.bracket === 'GF').map((m) => m.bestOf))],
+    [GRAND_FINAL_BEST_OF],
+  );
 });
 
 test('too few teams produces nothing rather than throwing', () => {
