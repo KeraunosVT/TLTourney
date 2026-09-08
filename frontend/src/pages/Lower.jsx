@@ -35,7 +35,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { useCountdown, countdownLabel, mmss, whenShort } from '../lib/clock';
-import { pollMs } from '../lib/stream';
+import { pollMs, bracketPollMs } from '../lib/stream';
 import { big } from './Match';
 
 // Every card this page knows how to draw. They cycle in the order the URL asks
@@ -127,13 +127,22 @@ export default function Lower() {
   // same reason: OBS carries no cookie.
   const feeds = useMemo(() => new Set(wanted.map((t) => SOURCE[t])), [wanted]);
 
-  // Five seconds rather than two — the server caches this for three, and a
-  // bracket is not a clock.
+  // Scaled to what a bracket can actually do, the same rule /watch uses. This
+  // was a flat five seconds — 720 reads an hour from a source that is added to
+  // OBS the afternoon before and left running, to redraw a series score that
+  // changes a few times a night and a crowd split that a caster reads out loud
+  // anyway. Once there is a champion it drops to twice an hour.
+  const [bracketState, setBracketState] = useState(null);
   const liveBracket = usePoll(
     `/api/stream/bracket${pinnedMatch ? `?match=${encodeURIComponent(pinnedMatch)}` : ''}`,
-    5000,
+    bracketPollMs(bracketState),
     !demo && feeds.has('bracket'),
   );
+  useEffect(() => {
+    setBracketState(liveBracket
+      ? { exists: liveBracket.exists, champion: liveBracket.champion }
+      : null);
+  }, [liveBracket?.exists, liveBracket?.champion?.id]);
 
   // Two seconds WHILE THE DRAFT IS LIVE, because the pick clock is the point
   // of these cards: at five the on-clock team would stay wrong for up to five

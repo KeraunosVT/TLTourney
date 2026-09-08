@@ -19,6 +19,34 @@ import axios from 'axios';
 export const pollMs = (status) => {
   if (status === 'live') return 2000;
   if (status === 'paused') return 10000;
+  // COMPLETE IS IMMUTABLE. Every pick is in, the rosters are final, and the
+  // order will never change again — there is nothing to find out. Five minutes
+  // rather than stopping outright, because these pages are left open for weeks
+  // and one of them is an OBS source: a draft that is reset and re-run has to
+  // reach a screen nobody is going to refresh by hand.
+  if (status === 'complete') return 300000;
+  return 60000;
+};
+
+/**
+ * How often to re-read the BRACKET, given what it is doing.
+ *
+ * It was a flat ten seconds — 360 reads an hour to watch something that changes
+ * a few times a night, and not at all for most of a season. Every tier below is
+ * the same argument the draft's rates are built on: match the rate to how fast
+ * the thing can actually change.
+ *
+ *   no bracket   nothing exists to change until an organizer draws it
+ *   champion     the tournament is OVER and the bracket is final
+ *   otherwise    a result can land at any moment, and this is the broadcast
+ *
+ * The middle case is the only one that has to be quick, and it is quick for one
+ * reason: /watch's bracket scene is on air. A result recorded during a stream
+ * showing up half an hour later is worse than any number of reads.
+ */
+export const bracketPollMs = (bracket) => {
+  if (!bracket?.exists) return 900000;      // 15 min
+  if (bracket.champion) return 1800000;     // 30 min — twice an hour, and even that is generous
   return 60000;
 };
 
@@ -99,12 +127,13 @@ export function useStreamDraft(wantPool = false) {
   //
   // PENDING AND COMPLETE POLL SLOWLY, and that is the change that matters for
   // the bill rather than the page. Neither can change without an organizer
-  // pressing something, and this page is left open for weeks between drafts —
-  // on /watch it is left open on a spare monitor indefinitely. At ten seconds
-  // that was six server round trips a minute, each one a fresh read of every
-  // roster in the tournament, to re-render a screen that says the draft has
-  // not started. A minute still notices a draft starting well inside the time
-  // it takes to read the first pick out loud.
+  // pressing something, and these pages are left open for weeks between drafts
+  // -- on /watch, on a spare monitor, indefinitely.
+  //
+  // Complete is the slowest of all because it is the only IMMUTABLE one: every
+  // pick is in and the rosters are final, so a poll can learn nothing. It still
+  // polls at all only so a draft that is reset and re-run reaches a screen
+  // nobody is going to refresh by hand.
   const status = state?.draft?.status;
   useEffect(() => {
     const id = setInterval(load, pollMs(status));

@@ -21,7 +21,7 @@ import PoolPanel from '../components/PoolPanel';
 import BracketScene from '../components/BracketScene';
 import MatchScene from '../components/MatchScene';
 import { useCountdown, mmss } from '../lib/clock';
-import { useStreamDraft } from '../lib/stream';
+import { useStreamDraft, bracketPollMs } from '../lib/stream';
 
 export default function Watch() {
   // ── The rail ──────────────────────────────────────────────────────────────
@@ -78,11 +78,14 @@ export default function Watch() {
     }
   }, []);
 
+  // Re-armed whenever the bracket's own state changes tier — drawn, or
+  // decided — so a tournament that finishes mid-broadcast drops to twice an
+  // hour without anybody reloading the source.
   useEffect(() => {
     bracketFetch();
-    const id = setInterval(bracketFetch, 10000);
+    const id = setInterval(bracketFetch, bracketPollMs(bracket));
     return () => clearInterval(id);
-  }, [bracketFetch]);
+  }, [bracketFetch, bracket?.exists, bracket?.champion?.id]);
 
   const d = state?.draft;
   const left = useCountdown(d?.deadline, d?.serverTime);

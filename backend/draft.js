@@ -913,7 +913,29 @@ async function assembleState(t, d) {
 // requests that arrive together in the same instant into a single database
 // read. A rejected promise caches too and expires with the rest; the next
 // window retries.
-const SNAPSHOT_MS = 1200;
+// How long a snapshot is good for, BY WHAT THE DRAFT IS DOING.
+//
+// 1.2s exists for the CLOCK: current_pick and the deadline have to be current
+// to the second while somebody is on it. That is the only state where it is
+// true, and applying it to the other three was reading a frozen draft hundreds
+// of times an hour to be told nothing had changed.
+//
+//   live    the clock is running and every second counts
+//   paused  it can resume at any moment, but nothing moves while it sits
+//   pending nothing changes until an organizer presses start
+//   complete IMMUTABLE — every pick is in and the rosters are final
+//
+// A reset, an undo, a start or a settings change all call invalidate(), so
+// none of these is a staleness window: they are backstops for the paths that
+// do not, like an organizer approving a signup while the draft is finished.
+const SNAPSHOT_TTL = {
+  live: 1200,
+  paused: 5000,
+  pending: 15000,
+  complete: 300000,
+};
+const SNAPSHOT_MS = SNAPSHOT_TTL.live;
+const snapshotTtl = (d) => SNAPSHOT_TTL[d?.status] ?? SNAPSHOT_TTL.pending;
 const snapshots = new Map();
 
 // The full pick history, cached like the others and cleared beside them.
@@ -968,7 +990,7 @@ function invalidate(tournamentId) {
 
 async function snapshot(t, d) {
   const hit = snapshots.get(t.id);
-  if (hit && Date.now() - hit.at < SNAPSHOT_MS) return hit.job;
+  if (hit && Date.now() - hit.at < snapshotTtl(d)) return hit.job;
 
   const job = (async () => {
     const [assembled, taken, poolRes] = await Promise.all([
