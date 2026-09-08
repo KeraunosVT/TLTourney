@@ -13,6 +13,7 @@ import Board from './pages/Board';
 import Draft from './pages/Draft';
 import Picks from './pages/Picks';
 import Rosters from './pages/Rosters';
+import Home from './pages/Home';
 import Parties from './pages/Parties';
 import Comp from './pages/Comp';
 import Bracket from './pages/Bracket';
@@ -170,8 +171,15 @@ export default function App() {
                 in which party stays behind a captain's login. */}
             <Route path="/rosters" element={<Rosters />} />
 
+            {/* THE FRONT DOOR, and the reason it is out here. This is the URL
+                that gets pasted into Discord, and it used to land a logged-out
+                visitor on a login page — the worst possible answer to "what is
+                this and what is happening". It reads only the public routes and
+                says plainly which links need an account. */}
+            <Route path="/" element={<Home />} />
+
             <Route element={<Gate />}>
-              <Route index element={<Navigate to="/signup" replace />} />
+              <Route path="/app" element={<Navigate to="/signup" replace />} />
               <Route path="/signup" element={<Signup />} />
               <Route path="/draft" element={<Draft />} />
               <Route path="/bracket" element={<Bracket />} />
