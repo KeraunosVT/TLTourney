@@ -84,33 +84,41 @@ export default function Comp() {
 
   return (
     <div className="min-h-screen bg-ink flex flex-col items-center py-6">
-      {/* Producer-only, and only a mouse reveals it — the same reason /watch
-          hides its scene switcher. A screenshot never contains a cursor.
+      {/* VISIBLE. This row was hidden behind a hover, borrowing the rule from
+          /watch, where the scene switcher is overlaid ON the captured scene and
+          a stray control would land in the shot. That reasoning does not apply
+          here: this sits ABOVE the crop box, outside it, so hiding it bought
+          nothing and cost the only way to reach the other three comps.
 
           The switcher renders only when more than one comp came back, which
-          means only for organizers: a captain is sent exactly one team by the
-          server and has nothing to switch between. It is not a permission
-          check — the server already made that decision — it is a control with
-          nothing to do disappearing rather than showing a list of one. */}
-      <div className="w-[1180px] mb-2 opacity-0 hover:opacity-100 focus-within:opacity-100
-                      transition-opacity flex items-center gap-2">
-        {(data.teams || []).length > 1 && (
+          means only for organizers — a captain is sent exactly one team by the
+          server and has nothing to switch between. Not a permission check; the
+          server already made that decision. */}
+      <div className="w-[1180px] mb-2 flex items-center gap-2.5 flex-wrap">
+        {(data.teams || []).length > 1 ? (
           <>
-            <span className="text-[11px] text-ash">Team</span>
+            <span className="text-[11px] uppercase tracking-[0.14em] text-ash">Team</span>
             <select
-              className="field-input py-1 text-[12px] max-w-[240px]"
+              className="field-input py-1 text-[12.5px] max-w-[260px]"
               value={team.id}
               onChange={(e) => setParams({ team: e.target.value })}
+              aria-label="Which team's comp to show"
             >
               {(data.teams || []).map((x) => (
                 <option key={x.id} value={x.id}>{x.name}</option>
               ))}
             </select>
+            <span className="text-[11px] text-dim">
+              {(data.teams || []).length} comps &middot; one at a time, so each screenshot is one team
+            </span>
           </>
+        ) : (
+          <span className="text-[11px] text-dim">
+            Your team&rsquo;s comp. Only its captains can see it.
+          </span>
         )}
-        <span className="text-[11px] text-dim">
-          crop the card below — this row is invisible without a cursor on it
-        </span>
+        <span className="flex-1" />
+        <span className="text-[11px] text-dim">crop the card below &darr;</span>
       </div>
 
       {/* THE CROP. Everything inside this box is the image. */}
