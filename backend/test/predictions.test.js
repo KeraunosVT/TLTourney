@@ -58,16 +58,51 @@ test('THE FIRST RECORDED GAME CLOSES IT, scheduled or not', () => {
   assert.match(w.reason, /started/);
 });
 
-test('A GAME ROW CLOSES IT, even before that game has a winner', () => {
+test('an UNSCHEDULED match closes on a game row, winner or not', () => {
   // Game 1's map goes in before game 1 is played — the organizer route accepts
-  // a map with no winner for exactly that reason. Waiting for a winner would
-  // leave an unscheduled match open through the whole of the first game.
+  // a map with no winner for exactly that reason. With no kickoff to lean on,
+  // that row is the ONLY signal anything is under way, and waiting for a winner
+  // would leave the match open through the whole of the first game.
   const m = match({ games: [{ game_number: 1, map: 'Talus', winner_team_id: null }] });
   assert.strictEqual(pickWindow(m).open, false);
   assert.match(pickWindow(m).reason, /started/);
 
   // And an empty games array is not a started match.
   assert.strictEqual(pickWindow(match({ games: [] })).open, true);
+});
+
+test('A PREPARED MAP DOES NOT CLOSE A MATCH THAT HAS NOT KICKED OFF', () => {
+  // The bug: maps for a 7pm match entered at lunchtime read as "the series has
+  // started" and locked predictions seven hours early, with nothing played and
+  // the fixture not due for hours.
+  //
+  // A future kickoff is a better lock than a setup step, and it is the one the
+  // people picking were told about.
+  const sevenPm = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString();
+  const m = match({
+    scheduled_at: sevenPm,
+    games: [{ game_number: 1, map: 'Talus', winner_team_id: null }],
+  });
+
+  const w = pickWindow(m);
+  assert.strictEqual(w.open, true, w.reason);
+  assert.strictEqual(w.closesAt, sevenPm, 'it closes at kickoff, not on the map');
+
+  // And it still shuts when that kickoff arrives.
+  assert.strictEqual(pickWindow(m, Date.parse(sevenPm)).open, false);
+  assert.match(pickWindow(m, Date.parse(sevenPm)).reason, /Kickoff/);
+});
+
+test('a RESULT still closes it, prepared map or not, kickoff or not', () => {
+  // The half that must not loosen: once a game has a winner, somebody has seen
+  // it, and no amount of schedule makes a pick honest.
+  const m = match({
+    scheduled_at: new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString(),
+    games: [{ game_number: 1, map: 'Talus', winner_team_id: A }],
+    series: series(1, 0),
+  });
+  assert.strictEqual(pickWindow(m).open, false);
+  assert.match(pickWindow(m).reason, /started/);
 });
 
 test('KICKOFF CLOSES IT even with no game recorded yet', () => {

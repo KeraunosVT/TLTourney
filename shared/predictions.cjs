@@ -111,27 +111,38 @@ function pickWindow(match, now = Date.now()) {
 
   if (match.status === 'complete') return { open: false, reason: 'Already played.' };
 
-  // ANY game row closes it, not just a game with a winner.
-  //
-  // The map for game 1 is normally entered before that game is played — the
-  // organizer route accepts a map with no winner precisely so it can be. If the
-  // lock waited for a recorded winner, an unscheduled match would stay open
-  // through the whole of game 1, and the picks arriving during it would be
-  // made by people watching the fight.
+  // A game with a RECORDED WINNER always closes it. Play has demonstrably
+  // happened, whatever the schedule said.
   const played = Number(match.series?.played) || 0;
-  const started = (match.games?.length || 0) > 0;
-  if (played > 0 || started) return { open: false, reason: 'The series has started.' };
+  if (played > 0) return { open: false, reason: 'The series has started.' };
+
+  // A game ROW with no winner is a different thing, and conflating the two was
+  // a bug. The organizer route accepts a map with no result precisely so game
+  // 1's map can be set up in advance — so a match scheduled for 7pm whose maps
+  // were entered at lunchtime was reading as "the series has started" and
+  // locking picks seven hours early, with no game played and the fixture not
+  // due for hours.
+  const prepared = (match.games?.length || 0) > 0;
 
   if (match.scheduled_at) {
     const kickoff = new Date(match.scheduled_at).getTime();
     if (Number.isFinite(kickoff) && now >= kickoff) {
       return { open: false, reason: 'Kickoff has passed.' };
     }
+    // A FUTURE KICKOFF GOVERNS, and a prepared map does not override it.
+    // The advertised start time is a better lock than a setup step, and it is
+    // the one the people picking were told about.
     return { open: true, closesAt: match.scheduled_at };
   }
 
-  // No scheduled time is the common case for a match whose teams have only just
-  // been decided. It stays open until somebody records a game.
+  // No scheduled time — the common case for a match whose teams have only just
+  // been decided. Here a prepared game row is the ONLY signal that anything is
+  // under way, so it still closes the window: without it an unscheduled match
+  // would stay open through the whole of game 1 and take picks from people
+  // watching the fight. That is what the old rule was protecting; it just
+  // should never have applied to matches that have a kickoff of their own.
+  if (prepared) return { open: false, reason: 'The series has started.' };
+
   return { open: true, closesAt: null };
 }
 
