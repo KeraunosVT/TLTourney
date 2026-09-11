@@ -14,7 +14,7 @@ import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Note, Empty } from '../components/ui';
 import { useAuth } from '../auth';
 import { CLASS_NAMES, WEAPONS_FOR, classify, weaponsLabel } from '@shared/classes.cjs';
-import { applySides, candidatesFor } from '@shared/scoreboard.cjs';
+import { applySides, candidatesFor, duplicateIds } from '@shared/scoreboard.cjs';
 import { MIN_BANS_PER_MATCH, MAX_BANS_PER_MATCH } from '@shared/maps.cjs';
 import { whenLocal, toLocalInput, fromLocalInput } from '../lib/clock';
 
@@ -403,6 +403,7 @@ export default function Match() {
         <Review
           review={review}
           busy={busy}
+          problem={banner?.tone === 'bad' ? banner.text : null}
           onPatch={patch}
           onSides={resideReview}
           onColour={recolourRow}
@@ -442,11 +443,17 @@ export default function Match() {
 }
 
 // ── The review ──────────────────────────────────────────────────────────────
-function Review({ review, busy, onPatch, onSides, onColour, onAdd, onRemove, onCancel, onCommit }) {
+function Review({ review, busy, problem, onPatch, onSides, onColour, onAdd, onRemove, onCancel, onCommit }) {
   const live = useMemo(() => ({
     total: review.rows.length,
     matched: review.rows.filter((r) => r.signup_id).length,
   }), [review.rows]);
+
+  // The one thing in this table that will REFUSE to save, so it is computed on
+  // every keystroke rather than discovered by the server at the end. Overlapping
+  // pages produce it routinely; before this it surfaced as a 409 in the console,
+  // under a banner at the top of the page that nobody scrolled back up to see.
+  const dupes = useMemo(() => duplicateIds(review.rows), [review.rows]);
 
   const roster = review.roster || [];
   const editing = !!review.editing;
@@ -559,7 +566,11 @@ function Review({ review, busy, onPatch, onSides, onColour, onAdd, onRemove, onC
               <tr
                 key={r.id || `row-${i}`}
                 className={`border-t border-line/50 ${
-                  r.side_conflict ? 'bg-oxblood/25' : r.signup_id ? '' : 'bg-crimson/[0.06]'
+                  // Duplicates first: a side conflict is something to check, a
+                  // duplicate is something that stops the save.
+                  dupes.has(r.signup_id) ? 'bg-oxblood/40'
+                    : r.side_conflict ? 'bg-oxblood/25'
+                      : r.signup_id ? '' : 'bg-crimson/[0.06]'
                 }`}
               >
                 <td className="px-2 py-1.5 whitespace-nowrap">
@@ -627,6 +638,11 @@ function Review({ review, busy, onPatch, onSides, onColour, onAdd, onRemove, onC
                       </option>
                     ))}
                   </select>
+                  {dupes.has(r.signup_id) && (
+                    <div className="text-[10px] text-crimsonbright mt-0.5">
+                      already on another row — delete whichever is the duplicate
+                    </div>
+                  )}
                   {r.match_note === 'ambiguous' && (
                     <div className="text-[10px] text-crimsonbright mt-0.5">
                       two players share this name — pick one
@@ -702,9 +718,20 @@ function Review({ review, busy, onPatch, onSides, onColour, onAdd, onRemove, onC
         </span>
       </div>
 
+      {/* Beside the button that failed, not only in the page banner far above —
+          the save is at the bottom of a forty-row table, and a reason nobody
+          scrolls back up to read is a reason nobody reads. */}
+      {problem && (
+        <div className="px-4 pt-3">
+          <Note tone="bad">{problem}</Note>
+        </div>
+      )}
+
       <div className="px-4 py-3 border-t border-line flex items-center gap-2 flex-wrap">
-        <Button variant="good" disabled={busy} onClick={onCommit}>
-          {busy ? 'Saving…' : `Save ${live.total} rows to game ${review.game_number}`}
+        <Button variant="good" disabled={busy || dupes.size > 0} onClick={onCommit}>
+          {busy ? 'Saving…'
+            : dupes.size > 0 ? `${dupes.size} player${dupes.size === 1 ? ' is' : 's are'} on two rows`
+              : `Save ${live.total} rows to game ${review.game_number}`}
         </Button>
         <Button variant="ghost" disabled={busy} onClick={onCancel}>
           {editing ? 'Cancel' : 'Discard'}

@@ -73,6 +73,33 @@ function linkRows(rows, roster) {
   });
 }
 
+/**
+ * The people who appear on MORE THAN ONE row.
+ *
+ * One person cannot be twice on one scoreboard, and the database refuses it —
+ * `pms_one_row_per_player_per_game`. But the refusal arrives at save time, at
+ * the bottom of a long table, after the review is done, and it names at most one
+ * player. The condition is knowable the moment the rows exist, so it is computed
+ * here and shown in the table instead.
+ *
+ * It is a NORMAL outcome of merging overlapping screenshots, not a rare fault:
+ * pages are overlapped on purpose so nothing falls between two shots, and
+ * `mergePages` keys on rank — so one player photographed twice, whose rank read
+ * differently on the two pages, survives as two rows that link to the same
+ * person. Somebody has to delete one, and they need to be told which.
+ *
+ * @returns Set of signup_ids on two or more rows. Unmatched rows are ignored:
+ *          many rows legitimately have no person.
+ */
+function duplicateIds(rows) {
+  const count = new Map();
+  (rows || []).forEach((r) => {
+    if (!r.signup_id) return;
+    count.set(r.signup_id, (count.get(r.signup_id) || 0) + 1);
+  });
+  return new Set([...count].filter(([, n]) => n > 1).map(([id]) => id));
+}
+
 /** How the review went, for the line above the table. */
 function linkSummary(linked) {
   const rows = linked || [];
@@ -489,6 +516,7 @@ function rank(entries, by = 'damage_dealt') {
 }
 
 module.exports = {
-  normalizeName, linkRows, linkSummary, mergePages, inferSides, storedSides, applySides, candidatesFor,
+  normalizeName, linkRows, linkSummary, duplicateIds, mergePages,
+  inferSides, storedSides, applySides, candidatesFor,
   playerProfile, leaderboard, rank, SORTS, isSort,
 };

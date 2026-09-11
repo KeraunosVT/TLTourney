@@ -9,7 +9,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 
 const {
-  normalizeName, linkRows, linkSummary, playerProfile, leaderboard, rank, isSort,
+  normalizeName, linkRows, linkSummary, duplicateIds,
+  playerProfile, leaderboard, rank, isSort,
 } = require('../../shared/scoreboard.cjs');
 
 const roster = [
@@ -95,6 +96,54 @@ test('linking never drops or reorders rows', () => {
   const rows = [row('Keraunos'), row('Nobody'), row('xSouless')];
   const linked = linkRows(rows, roster);
   assert.deepStrictEqual(linked.map((r) => r.player_name), ['Keraunos', 'Nobody', 'xSouless']);
+});
+
+// ── One person, two rows ────────────────────────────────────────────────────
+// The condition that REFUSES a save. Found at review time so the reviewer can
+// delete a row, rather than at commit time as a 409 under a finished review.
+test('a player on two rows is reported, by id', () => {
+  const rows = [
+    { signup_id: 'p1', player_name: 'Keraunos' },
+    { signup_id: 'p2', player_name: 'xSouless' },
+    { signup_id: 'p1', player_name: 'Keraunos' },
+  ];
+  assert.deepStrictEqual([...duplicateIds(rows)], ['p1']);
+});
+
+test('OVERLAPPING PAGES ARE THE NORMAL CAUSE, and rank does not hide it', () => {
+  // mergePages keys on rank, so one player shot twice whose rank read 7 on one
+  // page and 1 on another survives as two rows. They are the same person and
+  // the database will refuse them; nothing about the rows themselves says so.
+  const rows = linkRows(
+    [row('Keraunos', { rank: 7 }), row('Keraunos', { rank: 1 })],
+    roster
+  );
+  assert.strictEqual(duplicateIds(rows).size, 1);
+});
+
+test('unmatched rows are never duplicates of each other', () => {
+  // Forty rows can legitimately have no person — they are opponents and
+  // misreads. Counting them together would block every board with two strangers.
+  const rows = [
+    { signup_id: null, player_name: 'Stranger' },
+    { signup_id: null, player_name: 'Another' },
+  ];
+  assert.strictEqual(duplicateIds(rows).size, 0);
+});
+
+test('a clean board reports nothing', () => {
+  assert.strictEqual(duplicateIds(linkRows([row('Keraunos'), row('xSouless')], roster)).size, 0);
+  assert.strictEqual(duplicateIds([]).size, 0);
+});
+
+test('the same NAME twice is fine when they are different people', () => {
+  // Two players really can share an in-game name. What cannot repeat is the
+  // person, which is why this keys on signup_id and not on the name.
+  const rows = [
+    { signup_id: 'p1', player_name: 'Keraunos' },
+    { signup_id: 'p5', player_name: 'Keraunos' },
+  ];
+  assert.strictEqual(duplicateIds(rows).size, 0);
 });
 
 test('the summary counts each outcome exactly once', () => {

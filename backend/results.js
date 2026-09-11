@@ -24,7 +24,7 @@ const { supabase, currentTournament, audit } = require('./db');
 const { parseScreenshot, parseCsv } = require('./ingest');
 const { rostersByTeam } = require('./teams');
 const {
-  linkRows, linkSummary, mergePages, inferSides, storedSides, applySides,
+  linkRows, linkSummary, duplicateIds, mergePages, inferSides, storedSides, applySides,
   playerProfile, leaderboard, rank, SORTS, isSort,
 } = require('../shared/scoreboard.cjs');
 const { classify } = require('../shared/classes.cjs');
@@ -83,6 +83,21 @@ const toInt = (v) => {
  */
 function rowWarnings(linked) {
   const out = [];
+
+  // First, because it is the only one that will REFUSE the save. Overlapping
+  // screenshots produce this routinely — the same player shot twice, whose rank
+  // read differently on the two pages, survives the merge as two rows — and
+  // until this was said here, the first anybody heard of it was a 409 at the
+  // bottom of the table with the review already done.
+  const dupes = duplicateIds(linked);
+  if (dupes.size) {
+    const names = [...new Set(linked.filter((r) => dupes.has(r.signup_id)).map((r) => r.player_name))];
+    out.push(
+      `${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} on two rows — probably the same `
+      + 'player caught on two overlapping pages. Delete the duplicate row; this will not save until '
+      + 'you do.'
+    );
+  }
 
   // Restated in the language the review actually uses. ingest.js counts rows
   // whose WEAPONS it could not place; the table shows a class, so a warning
@@ -485,18 +500,24 @@ organizerRouter.post('/commit/:key', async (req, res) => {
   if (rows.length === 0) return res.status(400).json({ error: 'There are no rows to save.' });
 
   // One person cannot appear twice on one scoreboard. The database refuses it
-  // too — that is what pms_one_row_per_player_per_match is for — but catching
-  // it here can say WHICH name was doubled, which the constraint cannot.
-  const seen = new Map();
-  for (const r of rows) {
-    if (!r.signup_id) continue;
-    if (seen.has(r.signup_id)) {
-      return res.status(409).json({
-        error: `${r.player_name || 'That player'} is matched to the same person on two rows — `
-          + 'fix one of them before saving.',
-      });
-    }
-    seen.set(r.signup_id, true);
+  // too — that is what pms_one_row_per_player_per_game is for — but catching it
+  // here can say WHICH names were doubled, which the constraint cannot.
+  //
+  // ALL of them, not the first. Ten overlapping screenshots can double a handful
+  // of players at once, and reporting one per attempt is one round trip through
+  // a forty-row review per duplicate.
+  const dupes = duplicateIds(rows);
+  if (dupes.size) {
+    const doubled = rows.filter((r) => dupes.has(r.signup_id));
+    const names = [...new Set(doubled.map((r) => r.player_name || 'that player'))];
+    return res.status(409).json({
+      error: `${names.join(', ')} ${names.length === 1 ? 'appears' : 'appear'} on two rows — `
+        + 'usually the same player caught on two overlapping pages. Delete the duplicate row '
+        + `${names.length === 1 ? '' : 's '}and save again.`,
+      // So the table can point at the rows rather than leaving somebody to find
+      // two identical names in forty.
+      duplicate_signup_ids: [...dupes],
+    });
   }
 
   const clean = rows.map((r) => ({
