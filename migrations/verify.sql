@@ -825,6 +825,32 @@ select '031 · rls_auto_enable is still attached to an event trigger',
                     join pg_proc p on p.oid = e.evtfoid
                    where p.proname = 'rls_auto_enable' and e.evtenabled <> 'D')
 union all
+-- ── 032 ────────────────────────────────────────────────────────────────────
+select '032 · guild_aliases table',
+       to_regclass('public.guild_aliases') is not null
+union all
+-- THE one that keeps a tally deterministic. Without it, `MILK°` and `milk°` are
+-- two rows that can point at two different guilds, and which one wins depends
+-- on the order they come back in — so the same board tallies differently on two
+-- reads with nothing having changed.
+select '032 · one row per alias, case-insensitively',
+       exists (select 1 from pg_indexes
+               where schemaname = 'public' and indexname = 'guild_aliases_one_per_alias')
+union all
+select '032 · an alias cannot point at itself, and neither half can be blank',
+       exists (select 1 from pg_constraint where conname = 'guild_aliases_not_self')
+       and exists (select 1 from pg_constraint where conname = 'guild_aliases_not_blank')
+union all
+-- Resolution is ONE HOP (shared/guilds.cjs), so an alias whose canonical name
+-- is itself an alias resolves to a name that is not the answer — silently, and
+-- only for the guilds in the chain. Written the two-part way because it reads
+-- DATA out of a table a half-applied database may not have.
+select '032 · no alias points at another alias',
+       to_regclass('public.guild_aliases') is null
+       or not exists (select 1 from guild_aliases a
+                        join guild_aliases b
+                          on lower(btrim(b.alias)) = lower(btrim(a.canonical)))
+union all
 -- ── The one that is not about a migration ──────────────────────────────────
 -- EVERY PUBLIC TABLE SHOULD HAVE RLS ENABLED, and this app makes that free.
 --

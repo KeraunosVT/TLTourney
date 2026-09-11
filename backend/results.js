@@ -21,6 +21,7 @@
 const express = require('express');
 const multer = require('multer');
 const { supabase, currentTournament, audit } = require('./db');
+const { fetchAll } = require('./pagedRead');
 const { parseScreenshot, parseCsv } = require('./ingest');
 const { rostersByTeam } = require('./teams');
 const {
@@ -28,6 +29,8 @@ const {
   playerProfile, leaderboard, rank, SORTS, isSort,
 } = require('../shared/scoreboard.cjs');
 const { classify } = require('../shared/classes.cjs');
+const { canonicalGuild, guildTally } = require('../shared/guilds.cjs');
+const { guildAliases } = require('./guilds');
 const { seriesResult, gameSlots } = require('../shared/series.cjs');
 const { MAPS, available } = require('../shared/maps.cjs');
 
@@ -140,13 +143,14 @@ router.get('/match/:key', async (req, res) => {
     .eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
 
-  const [{ data: rows }, { data: teams }, { data: games }] = await Promise.all([
+  const [{ data: rows }, { data: teams }, { data: games }, aliases] = await Promise.all([
     supabase.from('player_match_stats').select(STAT_COLS)
       .eq('match_id', match.id).order('rank', { ascending: true }),
     supabase.from('teams').select('id, name, tag, seed').eq('tournament_id', t.id),
     supabase.from('match_games')
       .select('id, game_number, map, winner_team_id, scoreboard_at')
       .eq('match_id', match.id).order('game_number', { ascending: true }),
+    guildAliases(),
   ]);
 
   const byId = new Map((teams || []).map((x) => [x.id, x]));
@@ -154,7 +158,14 @@ router.get('/match/:key', async (req, res) => {
   (rows || []).forEach((r) => {
     const k = r.game_id || 'none';
     if (!byGame.has(k)) byGame.set(k, []);
-    byGame.get(k).push({ ...r, class: classify(r.weapon_1, r.weapon_2) });
+    // `guild` is what the spelling counts as; `guild_name` stays the spelling
+    // itself. Both, deliberately — the second is the evidence and the first is
+    // the answer, and a page that wants to show a misread can still reach it.
+    byGame.get(k).push({
+      ...r,
+      class: classify(r.weapon_1, r.weapon_2),
+      guild: canonicalGuild(r.guild_name, aliases),
+    });
   });
 
   // Every game played, plus the next one if the series is still live — see
@@ -220,6 +231,54 @@ router.get('/leaderboard', async (req, res) => {
     sort: sortBy,
     sorts: SORTS,
   });
+});
+
+/**
+ * Every guild that has appeared on a scoreboard, biggest first.
+ *
+ * The guild column has been filled in on every upload since 012 and shown on no
+ * page — so this is a read of something the database already knew and nobody
+ * could see.
+ *
+ * ALL rows, including the ones matched to nobody: an unmatched row is usually
+ * an opponent or a misread name, and it still carries a guild that was really
+ * on the screenshot. The leaderboard drops those rows because it is a statement
+ * about PEOPLE; this is a statement about who turned up.
+ */
+router.get('/guilds', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.json({ guilds: [], noGuild: 0, teams: [] });
+
+  let rows;
+  try {
+    // Paged: every row of every board, which is the one read here that grows
+    // without bound — a 50v50 season clears PostgREST's 1,000-row cap in a
+    // dozen matches, and the truncation arrives with no error attached.
+    rows = await fetchAll(
+      () => supabase.from('player_match_stats')
+        .select('id, guild_name, signup_id, player_name, team_id, kills, assists, damage_dealt, damage_taken, healing')
+        .eq('tournament_id', t.id)
+        .order('id', { ascending: true }),
+      { label: 'scoreboard rows' }
+    );
+  } catch (err) {
+    if (/schema cache|does not exist|relation/i.test(err.message || '')) {
+      return res.status(503).json({
+        error: 'The scoreboard table is missing — run migrations/012_scoreboards.sql in the '
+          + 'Supabase SQL editor, then migrations/verify.sql.',
+      });
+    }
+    console.error('guild tally read failed:', err.message);
+    return res.status(500).json({ error: 'Could not read the guilds.' });
+  }
+
+  const [{ data: teams }, aliases] = await Promise.all([
+    supabase.from('teams').select('id, name, tag').eq('tournament_id', t.id),
+    guildAliases(),
+  ]);
+
+  res.json({ ...guildTally(rows, aliases), teams: teams || [], rows: rows.length });
 });
 
 /** One player's profile. Keyed on the signup id, never on a name. */
@@ -365,11 +424,17 @@ organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req
     );
   }
 
-  const { data: teamRows } = await supabase.from('teams')
-    .select('id, name, tag').in('id', [match.team_a_id, match.team_b_id]);
+  const [{ data: teamRows }, aliases] = await Promise.all([
+    supabase.from('teams').select('id, name, tag').in('id', [match.team_a_id, match.team_b_id]),
+    guildAliases(),
+  ]);
 
   res.json({
-    rows: linked.map((r) => ({ ...r, class: classify(r.weapon_1, r.weapon_2) })),
+    rows: linked.map((r) => ({
+      ...r,
+      class: classify(r.weapon_1, r.weapon_2),
+      guild: canonicalGuild(r.guild_name, aliases),
+    })),
     summary: linkSummary(linked),
     sides,
     sidesConfident: confident,
@@ -436,11 +501,18 @@ organizerRouter.get('/review/:key', async (req, res) => {
   const sides = storedSides(rows);
   const linked = applySides(rows, sides, roster);
 
-  const { data: teamRows } = await supabase.from('teams')
-    .select('id, name, tag').in('id', [match.team_a_id, match.team_b_id].filter(Boolean));
+  const [{ data: teamRows }, aliases] = await Promise.all([
+    supabase.from('teams').select('id, name, tag')
+      .in('id', [match.team_a_id, match.team_b_id].filter(Boolean)),
+    guildAliases(),
+  ]);
 
   res.json({
-    rows: linked.map((r) => ({ ...r, class: classify(r.weapon_1, r.weapon_2) })),
+    rows: linked.map((r) => ({
+      ...r,
+      class: classify(r.weapon_1, r.weapon_2),
+      guild: canonicalGuild(r.guild_name, aliases),
+    })),
     summary: linkSummary(linked),
     sides,
     sidesConfident: !!(sides.Yellow && sides.Red),

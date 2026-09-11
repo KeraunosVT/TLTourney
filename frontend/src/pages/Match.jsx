@@ -801,6 +801,7 @@ function Saved({ rows, match, game, canEdit = false, busy = false, onEdit }) {
             <tr className="text-ash text-[10px] uppercase tracking-[0.1em] border-b border-line">
               <th className="text-left px-3 py-2 font-semibold">#</th>
               <th className="text-left px-3 py-2 font-semibold">Player</th>
+              <th className="text-left px-3 py-2 font-semibold">Guild</th>
               <th className="text-left px-3 py-2 font-semibold">Class</th>
               {col('kills', 'K')}
               {col('assists', 'A')}
@@ -825,6 +826,16 @@ function Saved({ rows, match, game, canEdit = false, busy = false, onEdit }) {
                         : match.team_b?.tag || match.team_b?.name}
                     </span>
                   )}
+                </td>
+                {/* What the spelling COUNTS AS, with the spelling itself on
+                    hover where an alias has changed it — the row stays the
+                    evidence, and `MILK°` reading as MILK should be checkable
+                    without opening the database. */}
+                <td
+                  className="px-3 py-1.5 text-[12px] text-ash"
+                  title={r.guild && r.guild !== r.guild_name ? `read as “${r.guild_name}”` : ''}
+                >
+                  {r.guild || <span className="text-dim">—</span>}
                 </td>
                 <td className="px-3 py-1.5 text-[12px]" title={`${r.weapon_1 || '?'} · ${r.weapon_2 || '?'}`}>
                   {r.class || <span className="text-crimsonbright">unknown</span>}
