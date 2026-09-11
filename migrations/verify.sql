@@ -295,12 +295,28 @@ select '010 · picks remember the board entries they cleared',
 union all
 -- Every pick must have put somebody on a roster. A pick with no roster row is a
 -- turn the draft stepped over, and nothing else in the app would report it.
+-- ON THE PLAYER, NOT ON THE PAIR. This matched (team_id, signup_id) until 033,
+-- which was the same thing while the only way onto a roster was being picked
+-- for it. A TRADE moves team_players.team_id and deliberately leaves
+-- draft_picks alone — the pick is the record of a captain choosing somebody at
+-- that moment, which a later trade does not unhappen — so the pair stops
+-- matching for every traded player and this row went red on a database where
+-- nothing was wrong.
+--
+-- What it is actually for is narrower and still checked: a pick with NO roster
+-- row anywhere is a player who is on the record as drafted and on nobody's
+-- roster — still in the pool, and draftable a second time by another team.
+-- That is what reconcile() repairs, and it keys on the signup alone too.
+--
+-- The team mismatch a trade creates is checked below, under 033, where an
+-- UNEXPLAINED one is still caught.
 select '010 · every pick has a matching roster row',
        not exists (
          select 1 from draft_picks p
           where not exists (
             select 1 from team_players tp
-             where tp.team_id = p.team_id and tp.signup_id = p.signup_id))
+             where tp.signup_id = p.signup_id
+               and tp.tournament_id = p.tournament_id))
 union all
 -- The pick numbers must be 1..n with no holes. A gap means an undo went half
 -- way, and the draft would hand the clock to the wrong team for the rest of the
@@ -517,10 +533,33 @@ union all
 -- checkable where a kickoff time was set, which is the case that matters: an
 -- unscheduled match locks on its first game row instead, and that has no
 -- timestamp to compare against.
+-- The anti-cheat row: somebody changing their pick once they can see how the
+-- game is going. It reads updated_at, which is "when this row last changed" and
+-- not "when its owner last saved it" — so an organizer repairing data trips it
+-- exactly like a late edit would.
+--
+-- 035 added corrected_at for that, and a stamped row is excluded here. The
+-- to_jsonb form is the two-part rule at the top of this file: before 035 the
+-- column does not exist, the expression is NULL, `is null` holds, and every row
+-- is still checked — so this reads the same as it always did until the
+-- migration lands. A repair that is not recorded is still caught.
 select '016 · no pick was saved after kickoff',
        not exists (select 1 from predictions p
                    join matches m on m.id = p.match_id
-                   where m.scheduled_at is not null and p.updated_at > m.scheduled_at)
+                   where m.scheduled_at is not null
+                     and p.updated_at > m.scheduled_at
+                     and to_jsonb(p)->>'corrected_at' is null)
+union all
+-- And a correction says who made it and why — 035's constraint enforces the
+-- three fields travelling together, this proves none got in another way.
+select '035 · every corrected prediction names who corrected it',
+       not exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'predictions'
+                     and column_name = 'corrected_at')
+       or not exists (select 1 from predictions p
+                      where to_jsonb(p)->>'corrected_at' is not null
+                        and (to_jsonb(p)->>'corrected_by' is null
+                          or to_jsonb(p)->>'corrected_why' is null))
 union all
 -- ── 017 ────────────────────────────────────────────────────────────────────
 select '017 · prediction_questions and question_answers exist',
@@ -900,6 +939,24 @@ union all
 -- captain it, and moving the row would leave team_captains pointing at somebody
 -- playing for the other team. shared/trades.cjs refuses it; this proves nothing
 -- got in another way.
+-- The half of 010's old check that a trade does NOT excuse. A player whose
+-- roster team differs from the team that drafted them must carry the trade that
+-- moved them; without one, the mismatch is a roster row somebody edited by hand
+-- or a move that half happened, which is exactly what 010 used to catch.
+--
+-- Written the two-part way: traded_from_team_id arrives with 033, and naming a
+-- missing column directly would abort the whole sweep.
+select '033 · every drafted player on another team was traded there',
+       not exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'team_players'
+                     and column_name = 'traded_from_team_id')
+       or not exists (
+         select 1 from draft_picks p
+           join team_players tp
+             on tp.signup_id = p.signup_id and tp.tournament_id = p.tournament_id
+          where tp.team_id <> p.team_id
+            and to_jsonb(tp)->>'traded_from_team_id' is null)
+union all
 select '033 · no captain plays for a team they do not captain',
        not exists (select 1 from team_players r
                      join team_captains c
