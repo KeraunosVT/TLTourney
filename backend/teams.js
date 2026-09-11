@@ -85,7 +85,13 @@ const withCaptains = (teams, byTeam) =>
 // the POOL (PoolPanel's filter), and the Discord fields only by the DM paths,
 // which read captains through CAPTAIN_ROWS instead. Roughly a third of the
 // bytes, fetched and discarded.
-const ROSTER_ROWS = `team_id, via, playing, draft_round, draft_pick, player:player_signups (
+// traded_from_team_id and traded_at arrive with migration 033. Selected here
+// only because that migration has been applied — PostgREST errors the WHOLE
+// select on an unknown column, and this read feeds the draft, the board, the
+// parties and both roster pages, so a column that is not there yet takes all of
+// them down at once rather than degrading.
+const ROSTER_ROWS = `team_id, via, playing, draft_round, draft_pick,
+  traded_from_team_id, traded_at, player:player_signups (
   id, player_name, role, classes
 )`;
 
@@ -105,6 +111,11 @@ async function rostersByTeam(tournamentId) {
       playing: row.playing,
       draft_round: row.draft_round,
       draft_pick: row.draft_pick,
+      // Where they came from, for the roster row that would otherwise read as a
+      // drafted player on a team that never picked them. Null for everybody who
+      // has never been traded, which is almost everybody.
+      traded_from_team_id: row.traded_from_team_id,
+      traded_at: row.traded_at,
       ...row.player,
     });
   });

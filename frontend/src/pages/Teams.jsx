@@ -293,7 +293,7 @@ export default function Teams() {
                     })}
                   </div>
 
-                  <Roster team={t} candidates={candidates} busy={busy === t.id} onAdd={addToRosterManually} onRemove={removeFromRoster} />
+                  <Roster team={t} teams={teams} candidates={candidates} busy={busy === t.id} onAdd={addToRosterManually} onRemove={removeFromRoster} />
                 </div>
 
                 <Button variant="ghost" onClick={() => remove(t)} disabled={busy === t.id}>Delete</Button>
@@ -503,14 +503,14 @@ function Trades({ teams, onDone, setBanner }) {
               {m.via === 'draft' && m.draft_pick && (
                 <span className="text-[10px] text-dim mono">R{m.draft_round}P{m.draft_pick}</span>
               )}
-              {/* No "traded" badge here on purpose. The roster read
-                  (teams.js ROSTER_ROWS) deliberately does not select
-                  traded_from_team_id: PostgREST errors the WHOLE select on an
-                  unknown column, and that read feeds the draft — so asking for
-                  a column added by 033 would take the draft down on any
-                  database that has not run it yet. One line to add once it is
-                  applied everywhere; the history below says who moved in the
-                  meantime. */}
+              {m.traded_from_team_id && (
+                <span
+                  className="text-[10px] uppercase tracking-[0.1em] text-dim"
+                  title={`Traded from ${teamName(teams, m.traded_from_team_id)}`}
+                >
+                  traded
+                </span>
+              )}
               {/* The arrow is the only thing on the row that says which way
                   this person is going, and it is the whole point of the form. */}
               {on && <span className="text-crimsonbright text-[11px] mono">→ {other.tag || other.name}</span>}
@@ -615,6 +615,13 @@ function Trades({ teams, onDone, setBanner }) {
       )}
     </Panel>
   );
+}
+
+// A team's name from its id. Trades store the team a player came FROM as an
+// id, and an id in a tooltip is not an answer to "where did they come from".
+function teamName(teams, teamId) {
+  const t = (teams || []).find((x) => x.id === teamId);
+  return t ? (t.name || t.tag) : 'another team';
 }
 
 // "15 → 14" for the side being read, or just the count before anybody is
@@ -803,7 +810,7 @@ function TeamInvite({ team, busy, onSave }) {
 // A manual add/remove sits here too, rather than as its own panel, because a
 // no-show is dealt with while looking at the roster it broke — not on a
 // separate screen with its own copy of who's already on a team.
-function Roster({ team, candidates, busy, onAdd, onRemove }) {
+function Roster({ team, teams, candidates, busy, onAdd, onRemove }) {
   const members = team.roster || [];
   const p = team.progress;
 
@@ -830,6 +837,19 @@ function Roster({ team, candidates, busy, onAdd, onRemove }) {
               >
                 {m.via === 'captain' && <span className="text-crimson text-[9px]">★</span>}
                 {m.player_name}
+                {/* The answer to the question a trade creates: why is this
+                    drafted player on a team whose pick list never names them.
+                    A mark rather than a sentence — it sits on a chip in a wall
+                    of chips, and the tooltip carries the detail. */}
+                {m.traded_from_team_id && (
+                  <span
+                    className="text-dim text-[10px] leading-none"
+                    title={`Traded from ${teamName(teams, m.traded_from_team_id)}`}
+                    aria-label={`traded from ${teamName(teams, m.traded_from_team_id)}`}
+                  >
+                    ⇄
+                  </span>
+                )}
                 {/* A captain seat and a draft pick each have their own, more
                     correct way to leave — offering this button for them would
                     only send the click to a 409 the person clicking it can't
