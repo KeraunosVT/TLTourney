@@ -20,6 +20,7 @@ const board = require('./board');
 const draft = require('./draft');
 const bracket = require('./bracket');
 const results = require('./results');
+const trades = require('./trades');
 const predictions = require('./predictions');
 const parties = require('./parties');
 const { currentTournament, supabase } = require('./db');
@@ -186,6 +187,9 @@ app.use('/api/stats', results.router);
 app.use('/api/predictions', (req, res, next) => (req.method === 'GET' ? next() : writeLimiter(req, res, next)), predictions.router);
 
 app.use('/api/organizer/teams', requireOrganizer, teams.organizerRouter);
+// Trades move players BETWEEN rosters, which is neither team's own edit — so it
+// sits beside /teams rather than under it, and never below a captain's login.
+app.use('/api/organizer/trades', requireOrganizer, trades.organizerRouter);
 app.use('/api/organizer/bracket', requireOrganizer, bracket.organizerRouter);
 
 // Scoreboard upload carries a file, so it is exempt from the 64kb JSON body

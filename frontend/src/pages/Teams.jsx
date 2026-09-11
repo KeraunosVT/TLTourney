@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Empty, Note, Field } from '../components/ui';
 import { CAPTAIN_SEATS } from '@shared/captains.cjs';
 import { safeInvite, INVITE_HINT, MAX_INVITE } from '@shared/invites.cjs';
+import { validateTrade, describeTrade } from '@shared/trades.cjs';
 
 export default function Teams() {
   const [teams, setTeams] = useState([]);
@@ -359,8 +360,270 @@ export default function Teams() {
           </Panel>
         </div>
       </div>
+
+      <Trades teams={teams} onDone={load} setBanner={setBanner} />
     </div>
   );
+}
+
+// ── Trades ──────────────────────────────────────────────────────────────────
+// Moving players BETWEEN two rosters, which is the one roster change the rest
+// of this page cannot make: a drafted player has no remove button, because
+// removing their roster row does not remove them — the draft writes it back.
+//
+// Below the teams rather than beside them, because it is the rarest thing on
+// this page and the only one that changes two teams at once. Both rosters are
+// drawn in full while a trade is being built: the question being answered is
+// "who goes the other way", and it cannot be answered from one list.
+//
+// Validation is @shared/trades.cjs — the same module the server refuses with.
+// So the sentence under the button before it is pressed is the sentence that
+// comes back if it is pressed anyway, and a rule can never be enforced in one
+// place and not the other.
+function Trades({ teams, onDone, setBanner }) {
+  const [aId, setAId] = useState('');
+  const [bId, setBId] = useState('');
+  const [picked, setPicked] = useState(() => new Set());
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [needsMigration, setNeedsMigration] = useState(false);
+
+  const loadHistory = useCallback(async () => {
+    try {
+      const { data } = await api.get('/api/organizer/trades');
+      setHistory(data.trades || []);
+      setNeedsMigration(false);
+    } catch (err) {
+      // A missing table is the state of every database until somebody runs
+      // 033, including on the day this ships. Said once, here, rather than as
+      // a page-level error that looks like a fault.
+      if (err?.response?.status === 503) setNeedsMigration(true);
+    }
+  }, []);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const a = teams.find((t) => t.id === aId) || null;
+  const b = teams.find((t) => t.id === bId) || null;
+
+  // Clearing the picks when either side changes is not tidiness — a pick is a
+  // player ON a team, and keeping it across a change of teams would send
+  // somebody from a roster that is no longer on screen.
+  const chooseA = (id) => { setAId(id); if (id === bId) setBId(''); setPicked(new Set()); };
+  const chooseB = (id) => { setBId(id); if (id === aId) setAId(''); setPicked(new Set()); };
+
+  const toggle = (signupId) => setPicked((prev) => {
+    const next = new Set(prev);
+    if (next.has(signupId)) next.delete(signupId); else next.add(signupId);
+    return next;
+  });
+
+  const rosters = useMemo(
+    () => new Map(teams.map((t) => [t.id, t.roster || []])),
+    [teams]
+  );
+
+  const moves = useMemo(() => {
+    if (!a || !b) return [];
+    const out = [];
+    [[a, b], [b, a]].forEach(([from, to]) => {
+      (from.roster || []).forEach((m) => {
+        if (picked.has(m.id)) out.push({ signup_id: m.id, from_team_id: from.id, to_team_id: to.id });
+      });
+    });
+    return out;
+  }, [a, b, picked]);
+
+  const check = useMemo(
+    () => (a && b ? validateTrade(moves, rosters, [a, b]) : null),
+    [a, b, moves, rosters]
+  );
+
+  async function submit() {
+    if (!check?.ok) return;
+    setBusy(true);
+    setBanner(null);
+    try {
+      const { data } = await api.post('/api/organizer/trades', {
+        team_a_id: a.id,
+        team_b_id: b.id,
+        moves,
+        note: note.trim() || undefined,
+      });
+      setPicked(new Set());
+      setNote('');
+      setBanner({
+        tone: 'good',
+        text: `Traded — ${data.trade.summary}.`
+          + (data.seatsEmptied
+            ? ` ${data.seatsEmptied} party seat${data.seatsEmptied === 1 ? '' : 's'} emptied.`
+            : ''),
+      });
+      await Promise.all([onDone(), loadHistory()]);
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err, 'Could not make that trade.') });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const side = (team, other) => (
+    <div className="flex-1 min-w-[240px]">
+      <div className="flex items-baseline justify-between gap-2 mb-1.5">
+        <span className="text-[13px] font-semibold truncate">{team.name}</span>
+        <span className="text-[11px] text-ash mono">
+          {sizeFor(check, team.id)}
+        </span>
+      </div>
+      <div className="border border-line rounded max-h-[260px] overflow-y-auto">
+        {(team.roster || []).length === 0 && (
+          <p className="text-[12px] text-ash px-2.5 py-3">Nobody on this roster yet.</p>
+        )}
+        {(team.roster || []).map((m) => {
+          const isCaptain = m.via === 'captain';
+          const on = picked.has(m.id);
+          return (
+            <label
+              key={m.id}
+              className={`flex items-center gap-2 px-2.5 py-1.5 border-b border-line/40 last:border-b-0
+                text-[12.5px] ${isCaptain ? 'opacity-45' : 'cursor-pointer hover:bg-panelup'}
+                ${on ? 'bg-crimson/[0.10]' : ''}`}
+              title={isCaptain ? 'Captains are traded by moving the captain seat, not here.' : ''}
+            >
+              <input
+                type="checkbox"
+                checked={on}
+                disabled={isCaptain || busy}
+                onChange={() => toggle(m.id)}
+                className="accent-crimson"
+              />
+              <span className="flex-1 truncate">{m.player_name}</span>
+              {isCaptain && <span className="text-[10px] uppercase tracking-[0.1em] text-ash">captain</span>}
+              {m.via === 'draft' && m.draft_pick && (
+                <span className="text-[10px] text-dim mono">R{m.draft_round}P{m.draft_pick}</span>
+              )}
+              {/* No "traded" badge here on purpose. The roster read
+                  (teams.js ROSTER_ROWS) deliberately does not select
+                  traded_from_team_id: PostgREST errors the WHOLE select on an
+                  unknown column, and that read feeds the draft — so asking for
+                  a column added by 033 would take the draft down on any
+                  database that has not run it yet. One line to add once it is
+                  applied everywhere; the history below says who moved in the
+                  meantime. */}
+              {/* The arrow is the only thing on the row that says which way
+                  this person is going, and it is the whole point of the form. */}
+              {on && <span className="text-crimsonbright text-[11px] mono">→ {other.tag || other.name}</span>}
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <Panel
+      title="Trade players"
+      subtitle="Moves players between two rosters, including drafted ones. The picks stay on the record."
+      className="mt-4"
+      right={<span className="text-xs text-ash">{history.length} trade{history.length === 1 ? '' : 's'} so far</span>}
+    >
+      {needsMigration && (
+        <div className="px-4 pt-4">
+          <Note tone="bad">
+            The trades table is missing — run migrations/033_trades.sql in the Supabase SQL editor,
+            then migrations/verify.sql. Nothing here will save until you do.
+          </Note>
+        </div>
+      )}
+
+      <div className="p-4 flex flex-col gap-4">
+        <div className="flex items-end gap-3 flex-wrap">
+          <Field label="Team" htmlFor="trade-a">
+            <select id="trade-a" className="field-input py-1.5 text-[13px] min-w-[190px]"
+                    value={aId} onChange={(e) => chooseA(e.target.value)} disabled={busy}>
+              <option value="">— choose —</option>
+              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </Field>
+          <span className="text-ash text-[12px] pb-2">and</span>
+          <Field label="Team" htmlFor="trade-b">
+            <select id="trade-b" className="field-input py-1.5 text-[13px] min-w-[190px]"
+                    value={bId} onChange={(e) => chooseB(e.target.value)} disabled={busy}>
+              <option value="">— choose —</option>
+              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </Field>
+        </div>
+
+        {!a || !b ? (
+          <p className="text-[12.5px] text-ash">
+            Pick two teams. Tick whoever is moving on each side — a trade can be lopsided, and the
+            roster sizes above each list say what it does to both.
+          </p>
+        ) : (
+          <>
+            <div className="flex gap-4 flex-wrap">
+              {side(a, b)}
+              {side(b, a)}
+            </div>
+
+            <Field label="Why" htmlFor="trade-note" optional
+                   hint="Goes on the record beside the trade. “Sub for Saturday”, “drafted in error”.">
+              <input id="trade-note" className="field-input py-1.5 text-[13px]" maxLength={280}
+                     value={note} onChange={(e) => setNote(e.target.value)} disabled={busy} />
+            </Field>
+
+            <div className="flex items-center gap-3 flex-wrap border-t border-line pt-3">
+              <Button variant="primary" disabled={busy || !check?.ok} onClick={submit}>
+                {busy ? 'Trading…' : moves.length ? `Trade ${moves.length} player${moves.length === 1 ? '' : 's'}` : 'Trade'}
+              </Button>
+              {/* The first refusal only. The others are the same list the
+                  server would give back, and a stack of red under a button
+                  nobody can press yet is noise. */}
+              {check && !check.ok && moves.length > 0 && (
+                <span className="text-[12px] text-crimsonbright">{check.errors[0]}</span>
+              )}
+              {check?.ok && (
+                <span className="text-[12px] text-ash">{describeTrade(check.moves)}</span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {history.length > 0 && (
+        <div className="border-t border-line">
+          {history.map((tr) => (
+            <div key={tr.id} className="px-4 py-2.5 border-b border-line/40 last:border-b-0 flex items-baseline gap-3 flex-wrap">
+              {/* A failed or half-applied trade is listed too. Hiding them is
+                  how a half-applied one stays invisible on the only page that
+                  would show it. */}
+              {tr.status !== 'applied' && (
+                <Pill tone={tr.status === 'pending' ? 'bad' : 'quiet'}>
+                  {tr.status === 'pending' ? 'half-applied — check the rosters' : 'failed'}
+                </Pill>
+              )}
+              <span className="text-[12.5px] flex-1 min-w-[240px]">{tr.summary}</span>
+              {tr.note && <span className="text-[11.5px] text-ash italic">“{tr.note}”</span>}
+              <span className="text-[11px] text-dim mono">
+                {new Date(tr.created_at).toLocaleDateString()}{tr.made_by ? ` · ${tr.made_by}` : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+// "15 → 14" for the side being read, or just the count before anybody is
+// ticked. Reads off the same validation the button uses, so it cannot drift
+// from what the trade will actually do.
+function sizeFor(check, teamId) {
+  const s = check?.sizes?.find((x) => x.team_id === teamId);
+  if (!s) return '';
+  return s.before === s.after ? `${s.before}` : `${s.before} → ${s.after}`;
 }
 
 // The name, which only becomes an input once you ask for it. A team is renamed

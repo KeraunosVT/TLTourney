@@ -903,4 +903,8 @@ streamRouter.get('/', async (req, res) => {
 module.exports = {
   publicRouter, organizerRouter, streamRouter, readiness, conflictMessage,
   captainCandidates, captaincyFor, captainsByTeam, rostersByTeam, rosteredIds, addToRoster,
+  // Shared with backend/trades.js, which freezes on the same condition and has
+  // to say the same sentence about it — a second copy of either is a second
+  // answer to "can the teams change right now".
+  draftUnderWay, DRAFT_FROZEN,
 };

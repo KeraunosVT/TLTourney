@@ -851,6 +851,54 @@ select '032 · no alias points at another alias',
                         join guild_aliases b
                           on lower(btrim(b.alias)) = lower(btrim(a.canonical)))
 union all
+-- ── 033 ────────────────────────────────────────────────────────────────────
+select '033 · trades table',
+       to_regclass('public.trades') is not null
+union all
+select '033 · a trade has two different teams and somebody in it',
+       exists (select 1 from pg_constraint where conname = 'trades_two_teams')
+       and exists (select 1 from pg_constraint where conname = 'trades_not_empty')
+       and exists (select 1 from pg_constraint where conname = 'trades_status_valid')
+union all
+select '033 · team_players records where a traded player came from',
+       (select count(*) = 2 from information_schema.columns
+         where table_schema = 'public' and table_name = 'team_players'
+           and column_name in ('traded_from_team_id', 'traded_at'))
+union all
+-- NO HALF-APPLIED TRADES. backend/trades.js writes the row as 'pending', moves
+-- the players, then marks it 'applied' — and rolls back and marks it 'failed'
+-- if any move fails. A row still 'pending' a minute later is a process that
+-- died mid-trade: one roster is short and the other long, both look normal, and
+-- this row's `moves` column is the only record of what was meant to happen.
+--
+-- The minute's grace is for a trade being applied at the moment this runs.
+select '033 · no trade is stuck half-applied',
+       to_regclass('public.trades') is null
+       or not exists (select 1 from trades
+                       where status = 'pending'
+                         and created_at < now() - interval '1 minute')
+union all
+-- A roster row claiming it was traded from the team it is still on. Nothing in
+-- the application writes that; it would mean a move that recorded itself and
+-- did not happen. Guarded because the column arrives with 033.
+select '033 · nobody was traded from the team they are on',
+       not exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'team_players'
+                     and column_name = 'traded_from_team_id')
+       or not exists (select 1 from team_players r
+                      where to_jsonb(r)->>'traded_from_team_id' is not null
+                        and to_jsonb(r)->>'traded_from_team_id' = r.team_id::text)
+union all
+-- A trade must never have moved a captain: they are on that roster BECAUSE they
+-- captain it, and moving the row would leave team_captains pointing at somebody
+-- playing for the other team. shared/trades.cjs refuses it; this proves nothing
+-- got in another way.
+select '033 · no captain plays for a team they do not captain',
+       not exists (select 1 from team_players r
+                     join team_captains c
+                       on c.signup_id = r.signup_id and c.tournament_id = r.tournament_id
+                    where r.via = 'captain' and c.team_id <> r.team_id)
+union all
 -- ── The one that is not about a migration ──────────────────────────────────
 -- EVERY PUBLIC TABLE SHOULD HAVE RLS ENABLED, and this app makes that free.
 --
