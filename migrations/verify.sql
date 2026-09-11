@@ -804,6 +804,13 @@ union all
 -- rls_auto_enable is an EVENT TRIGGER function, not an RPC. The API roles never
 -- needed to call it — an event trigger is fired by the trigger manager and does
 -- not consult EXECUTE — so this is the grant going away, not a capability.
+--
+-- READ FALSE UNTIL 034, and 031 was not the reason. Neither role ever held a
+-- direct grant: both inherited EXECUTE from PUBLIC, which is the default on any
+-- new function, and 031's role-scoped revokes had nothing to remove.
+-- has_function_privilege answers for privileges however they are held, so this
+-- row stayed red while the migration meant to satisfy it had applied cleanly.
+-- 034 revokes from PUBLIC, which is what this has always been testing for.
 select '031 · the API roles cannot execute rls_auto_enable',
        not exists (
          select 1 from pg_proc p

@@ -1,0 +1,72 @@
+-- 034_rls_auto_enable_public_grant.sql — finish what 031 started.
+--
+-- Run in the Supabase SQL editor AFTER 033. Safe to re-run.
+--
+-- ── 031 applied cleanly and did nothing ─────────────────────────────────────
+-- It revoked EXECUTE on public.rls_auto_enable() from `anon` and from
+-- `authenticated`, and verify.sql went on reporting that both could still call
+-- it. Not a migration that failed to run — a migration that revoked grants
+-- which were never there. The function's ACL, read off pg_proc:
+--
+--   {=X/postgres, postgres=X/postgres, service_role=X/postgres}
+--
+-- The first entry has an EMPTY grantee, and an empty grantee is PUBLIC. There
+-- is no `anon=X` and no `authenticated=X` in that list at all: both roles hold
+-- EXECUTE because PUBLIC does, and `has_function_privilege('anon', …)` answers
+-- for privileges however they are held. Revoking from a role that was never
+-- granted anything directly changes nothing, and the check stays false forever.
+--
+-- This is the default state of any function Supabase creates, not something
+-- somebody did — Postgres grants EXECUTE to PUBLIC on every new function
+-- unless told otherwise.
+--
+-- ── So the revoke has to name PUBLIC ────────────────────────────────────────
+-- 031 considered this and declined: "Revoking from PUBLIC would also cover
+-- roles invented later, but it reaches further than the lint asks and further
+-- than anybody here has checked."
+--
+-- The ACL is what settles it. Reaching further than the lint asks costs nothing
+-- here, because the two roles that actually need this function have their OWN
+-- explicit grants and keep them:
+--
+--   postgres=X       the owner, who runs migrations
+--   service_role=X   the key this application connects with
+--
+-- What PUBLIC covers is everything else — anon, authenticated, and any role
+-- invented later, which is exactly the set that should never have had it. A
+-- role created tomorrow inheriting EXECUTE on a SECURITY DEFINER-shaped
+-- function by default is the thing the lint is about.
+--
+-- ── And the trigger is still the part that matters ──────────────────────────
+-- Unchanged, as in 031: an event trigger is fired by the event trigger manager,
+-- which does NOT consult EXECUTE privileges. No role loses the RLS-on-new-tables
+-- behaviour; the function goes on firing for every `create table` in public.
+--
+-- The grant was never exploitable either way — the body's first statement is
+-- pg_event_trigger_ddl_commands(), which Postgres refuses to run outside a
+-- ddl_command_end event trigger, so a call over /rest/v1/rpc/ errors before it
+-- does anything. This is about a linter nobody can afford to stop reading, and
+-- about a verify.sql row that has been red since the day it was written.
+revoke execute on function public.rls_auto_enable() from public;
+
+-- Check — the ACL should now be {postgres=X/postgres, service_role=X/postgres},
+-- with no empty-grantee entry, and both API roles should read false:
+--   select p.proacl,
+--          has_function_privilege('anon', p.oid, 'EXECUTE') as anon_can,
+--          has_function_privilege('authenticated', p.oid, 'EXECUTE') as auth_can
+--     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--    where n.nspname = 'public' and p.proname = 'rls_auto_enable';
+--
+-- service_role keeps it explicitly — this is the one that must stay true, since
+-- it is the key the application connects with:
+--   select has_function_privilege('service_role',
+--            'public.rls_auto_enable()', 'EXECUTE') as service_role_keeps_it;
+--
+-- And the trigger is still armed. evtenabled should be 'O':
+--   select e.evtname, e.evtevent, e.evtenabled, p.proname
+--     from pg_event_trigger e
+--     join pg_proc p on p.oid = e.evtfoid
+--    where p.proname = 'rls_auto_enable';
+--
+-- verify.sql's '031 · the API roles cannot execute rls_auto_enable' row is the
+-- standing test for this and should read true from here on.
