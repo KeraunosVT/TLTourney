@@ -157,6 +157,41 @@ test('rows with no guild are COUNTED, not listed as a guild', () => {
   assert.ok(!guilds.some((g) => g.name === 'Unknown' || g.name === ''));
 });
 
+test('THE SPLIT BY TEAM COUNTS PEOPLE, NOT ROWS', () => {
+  // These sit beside `players` and have to be the same kind of number. Counting
+  // rows agreed with it exactly while every team had played once, then a second
+  // round of scoreboards made every segment twice its bar.
+  const { guilds } = guildTally([
+    grow('MILK', { signup_id: 'p1', team_id: 'A' }),
+    grow('MILK', { signup_id: 'p1', team_id: 'A' }),  // same player, game 2
+    grow('MILK', { signup_id: 'p2', team_id: 'A' }),
+  ], aliases);
+  assert.strictEqual(guilds[0].rows, 3);
+  assert.strictEqual(guilds[0].players, 2);
+  assert.deepStrictEqual(guilds[0].byTeam, { A: 2 }, 'two people, not three rows');
+});
+
+test('a player traded mid-season counts for both teams, and is flagged', () => {
+  // Their old scoreboard rows keep the team they played for at the time, which
+  // is right — so the per-team counts can add up to more than `players`, and a
+  // stacked bar built from them would run past its own bar without this.
+  const { guilds } = guildTally([
+    grow('MILK', { signup_id: 'p1', team_id: 'A' }),
+    grow('MILK', { signup_id: 'p1', team_id: 'B' }),
+  ], aliases);
+  assert.strictEqual(guilds[0].players, 1);
+  assert.deepStrictEqual(guilds[0].byTeam, { A: 1, B: 1 });
+  assert.strictEqual(guilds[0].playedForTwo, 1);
+});
+
+test('nobody is flagged as having played for two teams when they have not', () => {
+  const { guilds } = guildTally([
+    grow('MILK', { signup_id: 'p1', team_id: 'A' }),
+    grow('MILK', { signup_id: 'p2', team_id: 'B' }),
+  ], aliases);
+  assert.strictEqual(guilds[0].playedForTwo, 0);
+});
+
 test('the split by team counts only rows that have a side', () => {
   const { guilds } = guildTally([
     grow('MILK°', { signup_id: 'p1', team_id: 'A' }),

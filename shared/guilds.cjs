@@ -127,10 +127,19 @@ function guildTally(rows, aliases) {
     }
 
     const e = by.get(key);
+    const who = r.signup_id || `name:${guildKey(r.player_name)}`;
     e.rows += 1;
-    e.people.add(r.signup_id || `name:${guildKey(r.player_name)}`);
+    e.people.add(who);
     e.spellings.add(normalizeGuild(r.guild_name));
-    if (r.team_id) e.byTeam.set(r.team_id, (e.byTeam.get(r.team_id) || 0) + 1);
+
+    // PEOPLE PER TEAM, not rows per team. These sat beside `players` as though
+    // they were the same kind of number, and counted rows — so on a night where
+    // every team played once they agreed, and on the next night the segments
+    // summed to twice the bar. A Set per team, for the reason `people` is one.
+    if (r.team_id) {
+      if (!e.byTeam.has(r.team_id)) e.byTeam.set(r.team_id, new Set());
+      e.byTeam.get(r.team_id).add(who);
+    }
     e.kills += num(r.kills);
     e.assists += num(r.assists);
     e.damage_dealt += num(r.damage_dealt);
@@ -143,7 +152,14 @@ function guildTally(rows, aliases) {
       ...e,
       players: people.size,
       spellings: [...spellings].sort(),
-      byTeam: Object.fromEntries(byTeam),
+      byTeam: Object.fromEntries([...byTeam].map(([team, who]) => [team, who.size])),
+      // Somebody TRADED mid-season played for two teams, so the per-team counts
+      // can add up to more than `players`. Rare and real, and said out loud
+      // because a stacked bar drawn from byTeam would otherwise silently run
+      // past the length of its own bar.
+      playedForTwo: [...people].filter(
+        (p) => [...byTeam.values()].filter((who) => who.has(p)).length > 1
+      ).length,
     }))
     .sort((a, b) => b.players - a.players || b.kills - a.kills || a.name.localeCompare(b.name));
 
