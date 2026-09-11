@@ -24,7 +24,7 @@ const { supabase, currentTournament, audit } = require('./db');
 const { parseScreenshot, parseCsv } = require('./ingest');
 const { rostersByTeam } = require('./teams');
 const {
-  linkRows, linkSummary, mergePages, inferSides, applySides,
+  linkRows, linkSummary, mergePages, inferSides, storedSides, applySides,
   playerProfile, leaderboard, rank, SORTS, isSort,
 } = require('../shared/scoreboard.cjs');
 const { classify } = require('../shared/classes.cjs');
@@ -73,6 +73,35 @@ const toInt = (v) => {
   const n = Math.trunc(Number(v));
   return Number.isFinite(n) && n >= 0 ? n : 0;
 };
+
+/**
+ * What is wrong with the ROWS themselves, in the language the review table uses.
+ *
+ * Separate from the warnings about files and merging because these two apply to
+ * any set of rows on their way to the table — a fresh read, or a saved board
+ * reopened to be corrected — and the reviewer fixes them the same way in both.
+ */
+function rowWarnings(linked) {
+  const out = [];
+
+  // Restated in the language the review actually uses. ingest.js counts rows
+  // whose WEAPONS it could not place; the table shows a class, so a warning
+  // about weapons sends a reviewer looking for a column that isn't there.
+  const noClass = linked.filter((r) => !classify(r.weapon_1, r.weapon_2)).length;
+  if (noClass) {
+    out.push(`${noClass} row(s) have no class the weapons resolve to — set it in the Class column.`);
+  }
+
+  const sideConflicts = linked.filter((r) => r.side_conflict).length;
+  if (sideConflicts) {
+    out.push(
+      `${sideConflicts} row(s) are on a colour that disagrees with the team their name belongs to `
+      + '— either the name or the colour was misread, so check those first.'
+    );
+  }
+
+  return out;
+}
 
 /** Everyone on either team of this match, as the linker wants them. */
 async function rosterFor(tournamentId, match) {
@@ -307,21 +336,8 @@ organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req
       .filter((w) => !/weapon to confirm/i.test(w)),
   ];
 
-  // Restated in the language the review actually uses. ingest.js counts rows
-  // whose WEAPONS it could not place; the table shows a class, so a warning
-  // about weapons sends a reviewer looking for a column that isn't there.
-  const noClass = linked.filter((r) => !classify(r.weapon_1, r.weapon_2)).length;
-  if (noClass) {
-    warnings.push(`${noClass} row(s) have no class the weapons resolve to — set it in the Class column.`);
-  }
+  warnings.push(...rowWarnings(linked));
 
-  const sideConflicts = linked.filter((r) => r.side_conflict).length;
-  if (sideConflicts) {
-    warnings.push(
-      `${sideConflicts} row(s) are on a colour that disagrees with the team their name belongs to `
-      + '— either the name or the colour was misread, so check those first.'
-    );
-  }
   if (contradicted) {
     warnings.push(
       'The names on the Yellow rows mostly belong to the team you marked as Red, and vice versa — '
@@ -348,6 +364,77 @@ organizerRouter.post('/parse/:key', upload.array('files', MAX_FILES), async (req
     usedLegend: pages.find((p) => p.usedLegend !== undefined)?.usedLegend ?? null,
     // The two rosters, so the review can offer a dropdown per unmatched row.
     roster,
+  });
+});
+
+/**
+ * A scoreboard that is ALREADY SAVED, handed back in the shape the review table
+ * wants. Writes nothing.
+ *
+ * Until this existed, the only way to fix one wrong number on a committed board
+ * was to upload all ten screenshots again and redo the whole review, or to clear
+ * the game and start from nothing. Both are the same answer — throw away forty
+ * correct rows to correct one — and on the night, the third option people
+ * actually take is to leave it wrong.
+ *
+ * The rows come back as they were stored, not re-read and not re-linked: the
+ * name-to-person decisions on a saved board were made by a human and are not the
+ * model's to revisit. The only thing recomputed is `side_conflict`, which is a
+ * statement about the rows as they stand and has to be true of what is on screen.
+ */
+organizerRouter.get('/review/:key', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const { data: match } = await supabase.from('matches')
+    .select('id, key, team_a_id, team_b_id')
+    .eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
+  if (!match) return res.status(404).json({ error: 'No such match.' });
+
+  const gameNumber = Number(req.query.game);
+  if (!Number.isInteger(gameNumber) || gameNumber < 1) {
+    return res.status(400).json({ error: 'Which game is this scoreboard for?' });
+  }
+
+  const { data: game } = await supabase.from('match_games')
+    .select('id, game_number').eq('match_id', match.id).eq('game_number', gameNumber).maybeSingle();
+  if (!game) return res.status(404).json({ error: 'No such game.' });
+
+  const { data: rows } = await supabase.from('player_match_stats').select(STAT_COLS)
+    .eq('game_id', game.id).order('rank', { ascending: true });
+  if (!rows || rows.length === 0) {
+    return res.status(404).json({ error: `Game ${gameNumber} has no scoreboard to edit.` });
+  }
+
+  let roster;
+  try {
+    roster = await rosterFor(t.id, match);
+  } catch (err) {
+    console.error(err.message);
+    return res.status(500).json({ error: 'Could not read the rosters to match names against.' });
+  }
+
+  // Read off the saved rows rather than inferred from the names again — this is
+  // the split the board was committed under, and disagreeing with it here would
+  // look like the edit had moved everybody.
+  const sides = storedSides(rows);
+  const linked = applySides(rows, sides, roster);
+
+  const { data: teamRows } = await supabase.from('teams')
+    .select('id, name, tag').in('id', [match.team_a_id, match.team_b_id].filter(Boolean));
+
+  res.json({
+    rows: linked.map((r) => ({ ...r, class: classify(r.weapon_1, r.weapon_2) })),
+    summary: linkSummary(linked),
+    sides,
+    sidesConfident: !!(sides.Yellow && sides.Red),
+    teams: teamRows || [],
+    warnings: rowWarnings(linked),
+    files: [],
+    roster,
+    game_number: game.game_number,
+    editing: true,
   });
 });
 

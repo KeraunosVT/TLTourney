@@ -380,7 +380,7 @@ test('a full ten-page board with overlap comes out whole and once', () => {
 // which of the two teams a row counts for. Getting it from the NAME instead —
 // which is what this did at first — puts a mis-OCR'd row on the wrong team with
 // nothing on the page disagreeing with itself.
-const { inferSides, applySides, candidatesFor } = require('../../shared/scoreboard.cjs');
+const { inferSides, storedSides, applySides, candidatesFor } = require('../../shared/scoreboard.cjs');
 
 const sideRoster = [
   { id: 'a1', player_name: 'Ann', team_id: 'A' },
@@ -478,6 +478,56 @@ test('the candidate list is only the side that row played on', () => {
 test('with the sides unknown, every player is still offered', () => {
   const all = candidatesFor(srow('x', 'Yellow'), sideRoster, { Yellow: null, Red: null });
   assert.strictEqual(all.length, 4);
+});
+
+// ── Reopening a scoreboard that is already saved ────────────────────────────
+// Editing a committed board reads its sides back off the stored rows rather
+// than inferring them from names again. The stored team is what an organizer
+// decided; re-inferring could quietly disagree with it, and the disagreement
+// would look like the edit had moved everybody.
+const stored = (team_color, team_id, over = {}) => ({
+  player_name: 'x', team_color, team_id, signup_id: null, rank: 1, ...over,
+});
+
+test('the sides of a saved board are READ BACK, not inferred from names again', () => {
+  const sides = storedSides([
+    stored('Yellow', 'A'), stored('Yellow', 'A'), stored('Red', 'B'),
+  ]);
+  assert.deepStrictEqual(sides, { Yellow: 'A', Red: 'B' });
+});
+
+test('a saved board reads its sides even where no row matched a person', () => {
+  // The committed team_id is the answer here — these rows have no signup_id at
+  // all, so inferSides would have nothing to vote with.
+  const sides = storedSides([stored('Yellow', 'A'), stored('Red', 'B')]);
+  assert.deepStrictEqual(sides, { Yellow: 'A', Red: 'B' });
+});
+
+test('a saved board refuses the same guesses a fresh read does', () => {
+  // A tie is not an answer, and one team cannot have played both colours.
+  assert.strictEqual(storedSides([stored('Yellow', 'A'), stored('Yellow', 'B')]).Yellow, null);
+  const both = storedSides([stored('Yellow', 'A'), stored('Red', 'A')]);
+  assert.notStrictEqual(both.Yellow, both.Red);
+  assert.deepStrictEqual(storedSides([]), { Yellow: null, Red: null });
+});
+
+test('REOPENING A BOARD DOES NOT UN-TEAM A ROW IT CANNOT PLACE', () => {
+  // The failure this guards: a saved row whose colour never read, matched to
+  // somebody since taken off the roster. Neither the colour nor the roster can
+  // say where it belongs, and dropping the team it was COMMITTED with would
+  // mean editing one row silently moved another off its team.
+  const rows = [stored('', 'B', { player_name: 'Departed', signup_id: 'gone' })];
+  const [row] = applySides(rows, { Yellow: 'A', Red: 'B' }, sideRoster);
+  assert.strictEqual(row.team_id, 'B', 'kept what it was saved with');
+  assert.ok(!row.side_conflict);
+});
+
+test('a fresh read is unaffected by that fallback', () => {
+  // linkRows leaves an unmatched row with team_id null, so there is nothing to
+  // fall back TO — the colour still has to be the only thing that places it.
+  const linked = linkRows([srow('Stranger', '')], sideRoster);
+  const [row] = applySides(linked, { Yellow: 'A', Red: 'B' }, sideRoster);
+  assert.strictEqual(row.team_id, null, 'no colour, no name, no team');
 });
 
 // ── The class round-trip the review depends on ──────────────────────────────

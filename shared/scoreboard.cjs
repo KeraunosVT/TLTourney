@@ -115,6 +115,48 @@ function inferSides(rows, roster) {
     votes[colour][team] = (votes[colour][team] || 0) + 1;
   });
 
+  const sides = decideSides(votes, [...new Set([...teamOf.values()].filter(Boolean))]);
+  return {
+    sides,
+    votes,
+    confident: !!(sides.Yellow && sides.Red && sides.Yellow !== sides.Red),
+  };
+}
+
+/**
+ * Which team played which colour, according to a scoreboard ALREADY SAVED.
+ *
+ * The stored rows carry both halves of the answer — the colour they were read
+ * on and the team they were committed against — so this is a reading of what an
+ * organizer already decided, not a fresh inference from names. That distinction
+ * matters when a saved scoreboard is reopened to be corrected: re-inferring
+ * from names would quietly disagree with the sides the board was saved under,
+ * and the disagreement would look like the edit had done it.
+ *
+ * Majority per colour, with the same refusals as `inferSides`: a tie is not an
+ * answer, and one team cannot have played both colours.
+ */
+function storedSides(rows) {
+  const votes = { Yellow: {}, Red: {} };
+  const teams = new Set();
+
+  (rows || []).forEach((r) => {
+    if (!votes[r.team_color] || !r.team_id) return;
+    votes[r.team_color][r.team_id] = (votes[r.team_color][r.team_id] || 0) + 1;
+    teams.add(r.team_id);
+  });
+
+  return decideSides(votes, [...teams]);
+}
+
+/**
+ * Turn a colour → team vote tally into one mapping, leaving a colour null where
+ * the votes do not actually say.
+ *
+ * @param votes { Yellow: { teamId: count }, Red: { … } }
+ * @param teams every team id in play, so one known colour can place the other
+ */
+function decideSides(votes, teams) {
   const winner = (colour) => {
     const tally = Object.entries(votes[colour]);
     if (!tally.length) return null;
@@ -138,17 +180,12 @@ function inferSides(rows, roster) {
   }
 
   // One side known is enough to place the other, since a match has exactly two.
-  const teams = [...new Set([...teamOf.values()].filter(Boolean))];
-  if (teams.length === 2) {
+  if ((teams || []).length === 2) {
     if (Yellow && !Red) Red = teams.find((t) => t !== Yellow) || null;
     if (Red && !Yellow) Yellow = teams.find((t) => t !== Red) || null;
   }
 
-  return {
-    sides: { Yellow, Red },
-    votes,
-    confident: !!(Yellow && Red && Yellow !== Red),
-  };
+  return { Yellow, Red };
 }
 
 /**
@@ -171,7 +208,12 @@ function applySides(rows, sides, roster) {
       ...r,
       // Colour first. A row with no readable colour keeps whatever the name
       // gave it, which is better than nothing and is visible as "no side".
-      team_id: fromColour || fromRoster,
+      //
+      // The last fallback is for a SAVED scoreboard being reopened: those rows
+      // already have a team somebody chose, and a row whose colour never read
+      // and whose player has since left the roster would otherwise lose it —
+      // an edit to one row silently un-teaming another.
+      team_id: fromColour || fromRoster || r.team_id || null,
       side_conflict: conflict,
       match_note: conflict ? 'side-conflict' : r.match_note,
     };
@@ -447,6 +489,6 @@ function rank(entries, by = 'damage_dealt') {
 }
 
 module.exports = {
-  normalizeName, linkRows, linkSummary, mergePages, inferSides, applySides, candidatesFor,
+  normalizeName, linkRows, linkSummary, mergePages, inferSides, storedSides, applySides, candidatesFor,
   playerProfile, leaderboard, rank, SORTS, isSort,
 };

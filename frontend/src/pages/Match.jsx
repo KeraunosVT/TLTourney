@@ -104,12 +104,38 @@ export default function Match() {
       const ordered = [...d.rows].sort(
         (a, b) => (a.signup_id ? 1 : 0) - (b.signup_id ? 1 : 0) || (a.rank || 0) - (b.rank || 0)
       );
-      setReview({ ...d, rows: ordered });
+      // The game is pinned to the review at the moment it is created, not read
+      // off the tab when it is saved. Otherwise clicking to game 2 to check a
+      // map while a review is open would file game 1's rows under game 2.
+      setReview({ ...d, game_number: game, rows: ordered });
     } catch (err) {
       setBanner({ tone: 'bad', text: errorMessage(err) });
     } finally {
       setBusy(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
+  // Reopen a scoreboard that is already saved, in the same table it was checked
+  // in the first time. Correcting one misread number should not cost ten
+  // screenshots and a second pass over forty rows that were already right.
+  //
+  // Rows come back in the order they are stored — rank order, the order of the
+  // screenshot — rather than unmatched-first. Somebody editing a saved board is
+  // looking for a row they already know about; a fresh read is being checked
+  // from the top, which is why parse sorts and this does not.
+  async function editSaved(gameNumber) {
+    setBusy(true);
+    setBanner(null);
+    try {
+      const { data: d } = await api.get(
+        `/api/organizer/results/review/${encodeURIComponent(key)}`, { params: { game: gameNumber } }
+      );
+      setReview({ ...d, game_number: gameNumber });
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err, 'Could not open that scoreboard.') });
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -119,12 +145,13 @@ export default function Match() {
     try {
       const { data: d } = await api.post(`/api/organizer/results/commit/${encodeURIComponent(key)}`, {
         rows: review.rows,
-        game_number: game,
+        game_number: review.game_number ?? game,
       });
+      const saved = review.game_number ?? game;
       setReview(null);
       setBanner({
         tone: 'good',
-        text: `Saved ${d.total} rows — ${d.matched} matched to players`
+        text: `Saved ${d.total} rows to game ${saved} — ${d.matched} matched to players`
           + `${d.unmatched ? `, ${d.unmatched} left unmatched` : ''}.`,
       });
       load();
@@ -182,6 +209,20 @@ export default function Match() {
     rows: prev.rows.map((r, n) => (n === i ? { ...r, ...fields } : r)),
   }));
 
+  // A row the read missed entirely — a page that was never screenshotted, a
+  // player the model skipped. Added blank and at the bottom, with no colour and
+  // nobody attached, because every one of those is a decision for the person
+  // adding it rather than a default worth guessing at.
+  const addRow = () => setReview((prev) => ({
+    ...prev,
+    rows: [...prev.rows, {
+      rank: null, player_name: '', signup_id: null, team_id: null, team_color: null,
+      weapon_1: null, weapon_2: null, guild_name: null,
+      kills: 0, assists: 0, damage_dealt: 0, damage_taken: 0, healing: 0,
+      match_note: 'unmatched',
+    }],
+  }));
+
   // Changing which team played which colour re-teams EVERY row, including the
   // ones whose name matched nobody. That is the point of the colour deciding
   // it rather than the name.
@@ -192,6 +233,19 @@ export default function Match() {
     ...prev,
     sides: next,
     rows: applySides(prev.rows, next, prev.roster),
+  }));
+
+  // One row's colour, for the row the read got wrong on its own. It moves that
+  // row between teams, so the same rule that applies to the board has to run
+  // again — including the conflict flag, which is a claim about the rows as they
+  // now stand and would otherwise be left describing the previous version.
+  const recolourRow = (i, colour) => setReview((prev) => ({
+    ...prev,
+    rows: applySides(
+      prev.rows.map((r, n) => (n === i ? { ...r, team_color: colour } : r)),
+      prev.sides,
+      prev.roster
+    ),
   }));
 
   if (loading) return <div className="p-8 text-sm text-ash">Loading…</div>;
@@ -351,6 +405,8 @@ export default function Match() {
           busy={busy}
           onPatch={patch}
           onSides={resideReview}
+          onColour={recolourRow}
+          onAdd={addRow}
           onRemove={(i) => setReview((p) => ({ ...p, rows: p.rows.filter((_, n) => n !== i) }))}
           onCancel={() => setReview(null)}
           onCommit={commit}
@@ -362,7 +418,16 @@ export default function Match() {
         const rows = current?.rows || [];
         return rows.length === 0
           ? <Panel><Empty>No scoreboard for game {game} yet.</Empty></Panel>
-          : <Saved rows={rows} match={m} game={game} />;
+          : (
+            <Saved
+              rows={rows}
+              match={m}
+              game={game}
+              canEdit={canEdit}
+              busy={busy}
+              onEdit={() => editSaved(game)}
+            />
+          );
       })()}
 
       {/* Rows recorded before the series split matches into games. Shown rather
@@ -377,18 +442,23 @@ export default function Match() {
 }
 
 // ── The review ──────────────────────────────────────────────────────────────
-function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }) {
+function Review({ review, busy, onPatch, onSides, onColour, onAdd, onRemove, onCancel, onCommit }) {
   const live = useMemo(() => ({
     total: review.rows.length,
     matched: review.rows.filter((r) => r.signup_id).length,
   }), [review.rows]);
 
   const roster = review.roster || [];
+  const editing = !!review.editing;
 
   return (
     <Panel
-      title="Check this before saving"
-      subtitle="The colour says which team a row counts for; “whose stats” says which player on it. Unmatched rows are at the top."
+      title={editing
+        ? `Editing game ${review.game_number}'s saved scoreboard`
+        : `Check game ${review.game_number} before saving`}
+      subtitle={editing
+        ? 'These rows are already stored. Nothing changes until you save, and saving replaces all of them.'
+        : 'The colour says which team a row counts for; “whose stats” says which player on it. Unmatched rows are at the top.'}
       className="border-crimson/40"
       right={
         <span className="text-xs text-ash">
@@ -469,23 +539,60 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
             </tr>
           </thead>
           <tbody>
-            {review.rows.map((r, i) => (
+            {review.rows.map((r, i) => {
+              // Once per row, and used BOTH to fill the dropdown and to look up
+              // what was picked from it. Read only from the list, never from the
+              // whole roster: the two must agree, or a pick resolves to somebody
+              // who was not on offer.
+              const candidates = candidatesFor(r, roster, review.sides);
+              // Whoever the row is ALREADY attributed to, when the colour's own
+              // roster does not contain them — a side conflict, or somebody
+              // since taken off the team. Without this the select finds no
+              // matching option and renders blank, which reads as "nobody" and
+              // looks like the attribution had already been lost.
+              const adrift = r.signup_id && !candidates.some((o) => o.id === r.signup_id)
+                ? roster.find((o) => o.id === r.signup_id)
+                  || { id: r.signup_id, player_name: r.player_name, team_id: r.team_id }
+                : null;
+              const pickable = adrift ? [adrift, ...candidates] : candidates;
+              return (
               <tr
-                key={`${r.player_name}-${i}`}
+                key={r.id || `row-${i}`}
                 className={`border-t border-line/50 ${
                   r.side_conflict ? 'bg-oxblood/25' : r.signup_id ? '' : 'bg-crimson/[0.06]'
                 }`}
               >
-                <td className="px-2 py-1.5 mono text-ash whitespace-nowrap">
-                  {r.rank || '—'}
-                  <span
-                    className={`ml-1.5 text-[9px] uppercase ${
-                      r.team_color === 'Yellow' ? 'text-[#d8b657]'
-                        : r.team_color === 'Red' ? 'text-crimsonbright' : 'text-dim'
-                    }`}
-                  >
-                    {r.team_color ? r.team_color[0] : '?'}
-                  </span>
+                <td className="px-2 py-1.5 whitespace-nowrap">
+                  <div className="flex items-center gap-1">
+                    <input
+                      inputMode="numeric"
+                      placeholder="—"
+                      className="w-[40px] bg-panelup border border-line rounded px-1 py-1 text-[12px]
+                                 text-right mono outline-none focus:border-crimson"
+                      value={r.rank ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.value.replace(/[^0-9]/g, '');
+                        onPatch(i, { rank: v === '' ? null : Number(v) });
+                      }}
+                    />
+                    {/* Editable, because the colour is what decides which TEAM a
+                        row counts for — and it is read off an icon, which is the
+                        kind of thing a read gets wrong one row at a time. */}
+                    <select
+                      title="which side this row was on"
+                      className={`bg-panelup border border-line rounded px-1 py-1 text-[11px] outline-none
+                        focus:border-crimson ${
+                          r.team_color === 'Yellow' ? 'text-[#d8b657]'
+                            : r.team_color === 'Red' ? 'text-crimsonbright' : 'text-dim'
+                        }`}
+                      value={r.team_color || ''}
+                      onChange={(e) => onColour(i, e.target.value || null)}
+                    >
+                      <option value="">?</option>
+                      <option value="Yellow">Y</option>
+                      <option value="Red">R</option>
+                    </select>
+                  </div>
                 </td>
                 <td className="px-2 py-1.5">
                   <input
@@ -501,7 +608,7 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
                       focus:border-crimson ${r.signup_id ? 'border-line' : 'border-crimson/70'}`}
                     value={r.signup_id || ''}
                     onChange={(e) => {
-                      const who = options.find((o) => o.id === e.target.value);
+                      const who = pickable.find((o) => o.id === e.target.value);
                       onPatch(i, { signup_id: who?.id || null, team_id: who?.team_id || null });
                     }}
                   >
@@ -514,8 +621,10 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
                     {/* Only the side this row played on. A Yellow row cannot
                         be a Red player, so offering the other roster is
                         offering a hundred wrong answers. */}
-                    {candidatesFor(r, roster, review.sides).map((o) => (
-                      <option key={o.id} value={o.id}>{o.player_name}</option>
+                    {pickable.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.player_name}{o === adrift ? ' — not on this colour' : ''}
+                      </option>
                     ))}
                   </select>
                   {r.match_note === 'ambiguous' && (
@@ -575,20 +684,35 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
                   </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
 
+      <div className="px-4 py-2.5 border-t border-line">
+        <button
+          onClick={onAdd}
+          className="text-[11.5px] text-ash hover:text-bone underline underline-offset-2"
+        >
+          + add a row
+        </button>
+        <span className="text-[11.5px] text-dim ml-3">
+          for a player the read missed — a page nobody screenshotted, or a row it skipped
+        </span>
+      </div>
+
       <div className="px-4 py-3 border-t border-line flex items-center gap-2 flex-wrap">
         <Button variant="good" disabled={busy} onClick={onCommit}>
-          {busy ? 'Saving…' : `Save ${live.total} rows`}
+          {busy ? 'Saving…' : `Save ${live.total} rows to game ${review.game_number}`}
         </Button>
-        <Button variant="ghost" disabled={busy} onClick={onCancel}>Discard</Button>
+        <Button variant="ghost" disabled={busy} onClick={onCancel}>
+          {editing ? 'Cancel' : 'Discard'}
+        </Button>
         <p className="text-xs text-ash ml-2 max-w-[62ch] leading-relaxed">
-          Saving replaces any scoreboard already stored for this match. Rows left as “nobody” are
-          kept as evidence — they still show on this match — but they are not added to anyone's
-          totals or profile.
+          Saving replaces game {review.game_number}'s scoreboard entirely — rows removed here are
+          gone from it. Rows left as “nobody” are kept as evidence — they still show on this match —
+          but they are not added to anyone's totals or profile.
         </p>
       </div>
     </Panel>
@@ -596,7 +720,7 @@ function Review({ review, busy, onPatch, onSides, onRemove, onCancel, onCommit }
 }
 
 // ── The saved scoreboard ────────────────────────────────────────────────────
-function Saved({ rows, match, game }) {
+function Saved({ rows, match, game, canEdit = false, busy = false, onEdit }) {
   const [sort, setSort] = useState('damage_dealt');
   const sorted = useMemo(
     () => [...rows].sort((a, b) => (Number(b[sort]) || 0) - (Number(a[sort]) || 0)),
@@ -618,8 +742,18 @@ function Saved({ rows, match, game }) {
     <Panel
       title={game ? `Game ${game} scoreboard` : 'Scoreboard (recorded before games)'}
       right={
-        <span className="text-xs text-ash">
-          {rows.length} rows{unmatched ? ` · ${unmatched} not on either team` : ''}
+        <span className="flex items-center gap-3">
+          <span className="text-xs text-ash">
+            {rows.length} rows{unmatched ? ` · ${unmatched} not on either team` : ''}
+          </span>
+          {/* Only for a board that belongs to a game. The loose rows below
+              predate games having ids, and there is no game to commit them
+              back to — editing them would need a game number nobody recorded. */}
+          {canEdit && game && onEdit && (
+            <Button variant="ghost" disabled={busy} onClick={onEdit}>
+              {busy ? 'Opening…' : 'Edit'}
+            </Button>
+          )}
         </span>
       }
     >
