@@ -431,6 +431,91 @@ function playerProfile(rows) {
   };
 }
 
+// ── The two teams, side by side ─────────────────────────────────────────────
+/**
+ * The stats a differential is drawn for, and how each one reads.
+ *
+ * `big` says the number is in the millions and wants shortening on screen; it
+ * lives here rather than in the page so that adding a stat to the strip does not
+ * also mean remembering to add its key to a list of "these ones are huge".
+ *
+ * `neutral` marks the stat where MORE IS NOT BETTER. Damage taken is the whole
+ * reason the flag exists: Gear-Gap's version of this card colours the larger
+ * number as the winner for every row, which quietly congratulates whichever team
+ * got hit hardest. The number is still worth comparing — it is how the fight
+ * went — so it stays, and only the "they won this" colouring is withheld.
+ */
+const DIFF_STATS = [
+  { key: 'kills', label: 'Kills' },
+  { key: 'assists', label: 'Assists' },
+  { key: 'damage_dealt', label: 'Damage', big: true },
+  { key: 'damage_taken', label: 'Taken', big: true, neutral: true },
+  { key: 'healing', label: 'Healing', big: true },
+];
+
+/**
+ * What each team did on one scoreboard, and by how much it beat the other.
+ *
+ * Adapted from Gear-Gap's DifferentialCard, with the split done on the thing
+ * this app actually knows. Gear-Gap adds up `team_color`, because a wargame's
+ * two sides ARE Yellow and Red and which guild was which is a guess made from
+ * names. Here a row already carries a `team_id` that an organizer confirmed at
+ * review time — the colour is how that decision was reached, not the answer —
+ * so summing the colour again would re-derive a fact already established and
+ * would disagree with the saved board the moment somebody corrected one row's
+ * team by hand.
+ *
+ * @param rows   a game's stat rows, each with a `team_id`
+ * @param teams  the two teams, in the order they should appear ([A, B])
+ *
+ * Returns { sides, diffs, unplaced }:
+ *   sides     one entry per team GIVEN, in that order, with its totals — a team
+ *             that appears on no row is still present, with zeroes, because a
+ *             card that vanishes looks like the page forgot the team rather than
+ *             like half the scoreboard never got uploaded.
+ *   diffs     per stat: both totals, A minus B, and who leads. Empty unless
+ *             there are exactly two teams — "the differential" means nothing
+ *             with one side, or three.
+ *   unplaced  rows belonging to neither team. Not folded into either total:
+ *             they are opponents' rows, misreads, and rows whose colour never
+ *             read, and adding them to a side would make up a fact.
+ */
+function teamTotals(rows, teams) {
+  const sides = (teams || []).filter(Boolean).map((team) => ({
+    team,
+    players: 0,
+    ...EMPTY_TOTALS,
+  }));
+  const byId = new Map(sides.map((s) => [s.team.id, s]));
+  let unplaced = 0;
+
+  (rows || []).forEach((r) => {
+    const side = byId.get(r.team_id);
+    if (!side) { unplaced += 1; return; }
+    side.players += 1;
+    side.kills += num(r.kills);
+    side.assists += num(r.assists);
+    side.damage_dealt += num(r.damage_dealt);
+    side.damage_taken += num(r.damage_taken);
+    side.healing += num(r.healing);
+  });
+
+  const [a, b] = sides;
+  const diffs = sides.length === 2 ? DIFF_STATS.map((s) => {
+    const diff = a[s.key] - b[s.key];
+    return {
+      ...s,
+      a: a[s.key],
+      b: b[s.key],
+      diff,
+      // Null at level, so a dead heat reads as one rather than as a win of zero.
+      leader: diff === 0 ? null : (diff > 0 ? a.team.id : b.team.id),
+    };
+  }) : [];
+
+  return { sides, diffs, unplaced };
+}
+
 // ── Everybody, ranked ───────────────────────────────────────────────────────
 /**
  * The tournament leaderboard.
@@ -518,5 +603,5 @@ function rank(entries, by = 'damage_dealt') {
 module.exports = {
   normalizeName, linkRows, linkSummary, duplicateIds, mergePages,
   inferSides, storedSides, applySides, candidatesFor,
-  playerProfile, leaderboard, rank, SORTS, isSort,
+  playerProfile, leaderboard, teamTotals, DIFF_STATS, rank, SORTS, isSort,
 };

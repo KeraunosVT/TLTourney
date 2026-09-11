@@ -613,6 +613,122 @@ test('the order the two icons were read in does not change the class', () => {
   });
 });
 
+// ── The two teams, side by side ─────────────────────────────────────────────
+// The differential is the number everybody reads first, and every way of
+// getting it wrong produces a plausible margin rather than an error: a row
+// counted for the wrong side moves it twice, and a row counted for nobody
+// silently shrinks one column.
+const { teamTotals, DIFF_STATS } = require('../../shared/scoreboard.cjs');
+
+const teamA = { id: 'A', name: 'The Hamstars', tag: 'HAM' };
+const teamB = { id: 'B', name: 'Night Vultures', tag: 'NV' };
+const trow = (team_id, over = {}) => ({
+  team_id, player_name: 'x', kills: 1, assists: 2,
+  damage_dealt: 1000, damage_taken: 500, healing: 100, ...over,
+});
+
+const diffFor = (result, key) => result.diffs.find((d) => d.key === key);
+
+test('each team is summed into its own column, in the order the teams were given', () => {
+  const { sides, diffs } = teamTotals(
+    [trow('A', { kills: 10 }), trow('A', { kills: 5 }), trow('B', { kills: 6 })],
+    [teamA, teamB]
+  );
+  assert.deepStrictEqual(sides.map((s) => s.team.id), ['A', 'B']);
+  assert.strictEqual(sides[0].kills, 15);
+  assert.strictEqual(sides[1].kills, 6);
+  assert.strictEqual(sides[0].players, 2);
+  assert.strictEqual(diffFor({ diffs }, 'kills').diff, 9, 'A minus B, always that way round');
+});
+
+test('ROWS ON NEITHER TEAM ARE COUNTED, NOT GIVEN TO A SIDE', () => {
+  // Opponents' rows, misreads, and rows whose colour never read. Folding them
+  // into either column invents a margin out of a row nobody has placed.
+  const { sides, unplaced } = teamTotals(
+    [trow('A', { kills: 4 }), trow(null, { kills: 99 }), trow('C', { kills: 99 })],
+    [teamA, teamB]
+  );
+  assert.strictEqual(unplaced, 2);
+  assert.strictEqual(sides[0].kills, 4);
+  assert.strictEqual(sides[1].kills, 0);
+});
+
+test('a team that appears on no row is still a column, at zero', () => {
+  // Half the screenshots missing is a thing that happens on the night. A column
+  // of zeroes says so; a column that quietly is not drawn says nothing.
+  const { sides, diffs } = teamTotals([trow('A', { kills: 7 })], [teamA, teamB]);
+  assert.strictEqual(sides.length, 2);
+  assert.strictEqual(sides[1].players, 0);
+  assert.strictEqual(sides[1].kills, 0);
+  assert.strictEqual(diffFor({ diffs }, 'kills').leader, 'A');
+});
+
+test('BIGINT DAMAGE ARRIVING AS A STRING STILL ADDS UP', () => {
+  // PostgREST returns large bigints as strings. '1000' + '2000' is '10002000',
+  // which is not an error and is a very impressive differential.
+  const { sides } = teamTotals(
+    [trow('A', { damage_dealt: '1000000' }), trow('A', { damage_dealt: '2000000' })],
+    [teamA, teamB]
+  );
+  assert.strictEqual(sides[0].damage_dealt, 3000000);
+});
+
+test('missing numbers count as zero rather than poisoning a whole column', () => {
+  // The unreadable row contributes nothing; the good row beside it is untouched.
+  const { sides } = teamTotals(
+    [
+      trow('A', { kills: null, healing: undefined, damage_dealt: 'n/a' }),
+      trow('A', { kills: 3, healing: 50, damage_dealt: 800 }),
+    ],
+    [teamA, teamB]
+  );
+  assert.strictEqual(sides[0].kills, 3);
+  assert.strictEqual(sides[0].healing, 50);
+  assert.strictEqual(sides[0].damage_dealt, 800);
+  Object.values(sides[0]).forEach((v) => assert.ok(!Number.isNaN(v), 'no NaN anywhere'));
+});
+
+test('level is level — a dead heat has no leader rather than a winner by zero', () => {
+  const { diffs } = teamTotals([trow('A', { kills: 5 }), trow('B', { kills: 5 })], [teamA, teamB]);
+  assert.strictEqual(diffFor({ diffs }, 'kills').diff, 0);
+  assert.strictEqual(diffFor({ diffs }, 'kills').leader, null);
+});
+
+test('DAMAGE TAKEN IS MARKED NEUTRAL, because more of it is not winning', () => {
+  // Gear-Gap's card colours the bigger number as the winner on every row, which
+  // congratulates whichever team got hit hardest. The comparison is still worth
+  // showing; only the "they won this" reading is withheld.
+  assert.ok(DIFF_STATS.find((s) => s.key === 'damage_taken').neutral);
+  assert.ok(!DIFF_STATS.find((s) => s.key === 'kills').neutral);
+  const { diffs } = teamTotals([trow('A', { damage_taken: 900 }), trow('B', { damage_taken: 100 })], [teamA, teamB]);
+  assert.strictEqual(diffFor({ diffs }, 'damage_taken').leader, 'A', 'still says who took more');
+  assert.ok(diffFor({ diffs }, 'damage_taken').neutral);
+});
+
+test('a match without two teams yet has no differential at all', () => {
+  // "The differential" between a team and nothing is not a number.
+  assert.deepStrictEqual(teamTotals([trow('A')], [teamA]).diffs, []);
+  assert.deepStrictEqual(teamTotals([trow('A')], []).diffs, []);
+  assert.deepStrictEqual(teamTotals([trow('A')], [teamA, null]).diffs, []);
+});
+
+test('an empty scoreboard is two empty columns, not a crash', () => {
+  const { sides, diffs, unplaced } = teamTotals([], [teamA, teamB]);
+  assert.strictEqual(unplaced, 0);
+  assert.ok(sides.every((s) => s.players === 0 && s.kills === 0));
+  assert.ok(diffs.every((d) => d.diff === 0 && d.leader === null));
+  assert.deepStrictEqual(teamTotals(null, [teamA, teamB]).unplaced, 0);
+});
+
+test('every stat on the strip is one the scoreboard actually stores', () => {
+  // A label with no column behind it renders as a permanent zero.
+  const stored = ['kills', 'assists', 'damage_dealt', 'damage_taken', 'healing'];
+  assert.deepStrictEqual(DIFF_STATS.map((s) => s.key), stored);
+  const { diffs } = teamTotals([trow('A')], [teamA, teamB]);
+  assert.deepStrictEqual(diffs.map((d) => d.key), stored);
+  assert.ok(diffs.every((d) => d.label));
+});
+
 // ── Games are not matches ───────────────────────────────────────────────────
 // Best of three broke what a "match" counts. A scoreboard row is one GAME, and
 // counting rows and calling them matches told somebody who played one series

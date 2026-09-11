@@ -8,13 +8,13 @@
 // Rows arrive already matched to the two rosters, so the job is checking rather
 // than filling in. The rows that could NOT be matched are pushed to the top,
 // because they are the only ones that need a decision.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Note, Empty } from '../components/ui';
 import { useAuth } from '../auth';
 import { CLASS_NAMES, WEAPONS_FOR, classify, weaponsLabel } from '@shared/classes.cjs';
-import { applySides, candidatesFor, duplicateIds } from '@shared/scoreboard.cjs';
+import { applySides, candidatesFor, duplicateIds, teamTotals } from '@shared/scoreboard.cjs';
 import { MIN_BANS_PER_MATCH, MAX_BANS_PER_MATCH } from '@shared/maps.cjs';
 import { whenLocal, toLocalInput, fromLocalInput } from '../lib/clock';
 
@@ -101,8 +101,17 @@ export default function Match() {
       // Unmatched first — they are the rows that need a person, and reading
       // down forty correct rows to find three that don't have one is the job
       // this page exists to avoid.
+      //
+      // Then by KILLS rather than by the scoreboard's own rank. The rank column
+      // is a ranking of something else — the game sorts the board on its own
+      // score — so reading down it tells you nothing about who did the killing,
+      // and the number a reviewer is checking first against the screenshot is
+      // the top of the kill count. Rank is kept as the tiebreak so a board full
+      // of zeroes still comes out in scoreboard order rather than shuffled.
       const ordered = [...d.rows].sort(
-        (a, b) => (a.signup_id ? 1 : 0) - (b.signup_id ? 1 : 0) || (a.rank || 0) - (b.rank || 0)
+        (a, b) => (a.signup_id ? 1 : 0) - (b.signup_id ? 1 : 0)
+          || (Number(b.kills) || 0) - (Number(a.kills) || 0)
+          || (Number(a.rank) || 0) - (Number(b.rank) || 0)
       );
       // The game is pinned to the review at the moment it is created, not read
       // off the tab when it is saved. Otherwise clicking to game 2 to check a
@@ -784,6 +793,8 @@ function Saved({ rows, match, game, canEdit = false, busy = false, onEdit }) {
         </span>
       }
     >
+      <Differentials rows={rows} match={match} />
+
       <div className="overflow-x-auto">
         <table className="w-full text-[13px] border-collapse">
           <thead>
@@ -829,6 +840,101 @@ function Saved({ rows, match, game, canEdit = false, busy = false, onEdit }) {
         </table>
       </div>
     </Panel>
+  );
+}
+
+
+// ── The two teams, side by side ─────────────────────────────────────────────
+// Forty rows of individual numbers do not answer the question everybody asks
+// first, which is "by how much". Summing them by eye off a sortable table is
+// work, and it is the one thing on this page a reader will otherwise guess at.
+//
+// A row on neither team is left out of both columns and counted underneath —
+// see teamTotals. Both sides are always drawn, even at zero, because a column
+// of zeroes says "nobody's pages got uploaded for this team" and a column that
+// is simply absent says nothing at all.
+function Differentials({ rows, match }) {
+  const { sides, diffs, unplaced } = useMemo(
+    () => teamTotals(rows, [match.team_a, match.team_b].filter(Boolean)),
+    [rows, match.team_a, match.team_b]
+  );
+
+  // One team, or none: the match has not got two sides yet, and "the
+  // differential" between a team and nothing is not a number worth printing.
+  if (diffs.length === 0) return null;
+
+  const [a, b] = sides;
+  const fmt = (v, stat) => (stat.big ? big(v) : String(v));
+
+  const side = (team, players, align) => (
+    <div className={align === 'right' ? 'text-right' : ''}>
+      <div className="text-[13px] truncate">{team.name}</div>
+      <div className="text-[10.5px] text-ash mt-0.5">
+        {players} row{players === 1 ? '' : 's'}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="px-4 py-3 border-b border-line">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-x-3 gap-y-2">
+        {side(a.team, a.players, 'left')}
+        <div className="text-[10px] uppercase tracking-[0.1em] text-dim text-center">vs</div>
+        {side(b.team, b.players, 'right')}
+
+        {diffs.map((d) => {
+          // The leader is coloured, except where leading is not winning —
+          // damage taken is a fact about the fight, not a scoreline.
+          const tone = (isLeader) => (
+            !isLeader ? 'text-ash' : d.neutral ? 'text-bone' : 'text-verdigris'
+          );
+          const aLeads = d.leader === a.team.id;
+          const bLeads = d.leader === b.team.id;
+          const margin = fmt(Math.abs(d.diff), d);
+
+          return (
+            <Fragment key={d.key}>
+              <div className="text-right mono text-[14px] border-t border-line/40 pt-2">
+                <span className={tone(aLeads)}>{fmt(d.a, d)}</span>
+                {aLeads && (
+                  <span className={`text-[11px] ml-1.5 ${d.neutral ? 'text-dim' : 'text-verdigris'}`}>
+                    +{margin}
+                  </span>
+                )}
+              </div>
+              <div
+                className="text-[10px] uppercase tracking-[0.1em] text-ash text-center
+                           border-t border-line/40 pt-2.5 px-2 whitespace-nowrap"
+              >
+                {d.label}
+              </div>
+              <div className="mono text-[14px] border-t border-line/40 pt-2">
+                {bLeads && (
+                  <span className={`text-[11px] mr-1.5 ${d.neutral ? 'text-dim' : 'text-verdigris'}`}>
+                    +{margin}
+                  </span>
+                )}
+                <span className={tone(bLeads)}>{fmt(d.b, d)}</span>
+              </div>
+            </Fragment>
+          );
+        })}
+      </div>
+
+      {/* Said out loud rather than silently absorbed into one side. These are
+          the rows whose colour never read, so neither column includes them —
+          and they are exactly the rows that would make a margin wrong.
+          Deliberately worded away from the "not on either team" count in the
+          header above, which is a different thing: that one is about rows with
+          no PLAYER, this one about rows with no SIDE. */}
+      {unplaced > 0 && (
+        <p className="text-[11px] text-crimsonbright mt-2.5">
+          {unplaced} row{unplaced === 1 ? ' has' : 's have'} no side, so neither column counts
+          {unplaced === 1 ? ' it' : ' them'} — fix the colour in Edit to have {unplaced === 1 ? 'it' : 'them'}
+          {' '}count.
+        </p>
+      )}
+    </div>
   );
 }
 
