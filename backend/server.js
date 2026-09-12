@@ -128,6 +128,12 @@ app.use('/api/stream/bracket', streamLimiter, bracket.streamRouter);
 // Rosters are public because the picks that built them already are — see the
 // note above teams.streamRouter. Comps are NOT, and live behind a session.
 app.use('/api/stream/rosters', streamLimiter, teams.streamRouter);
+// Which guilds turned up. Public for the same reason the rosters are, plus one
+// of its own: the people most interested in a guild tally are the guilds, and
+// they are largely not in the tournament and have no account. It answers with
+// counts and totals only — the data-quality queue that names players stays on
+// the authenticated route.
+app.use('/api/stream/guilds', streamLimiter, results.streamRouter);
 
 // ── Everything below needs a session ────────────────────────────────────────
 app.use('/api', requireAuth);

@@ -281,6 +281,63 @@ router.get('/guilds', async (req, res) => {
   res.json({ ...guildTally(rows, aliases), teams: teams || [], rows: rows.length });
 });
 
+// ── The same tally, for people with no account ──────────────────────────────
+// PUBLIC, and it is the only scoreboard-derived read that is. The leaderboard
+// and the match pages sit behind a session because they are about PEOPLE —
+// named players, their profiles, the rows that matched nobody. This is about
+// which guilds turned up, and the audience for that is mostly the guilds
+// themselves: people who are not in the tournament, have no reason to have an
+// account, and are following a link out of Discord.
+//
+// The picks and the rosters are already public for the same reason, and every
+// number here is derived from those same committed boards.
+//
+// WHAT IT LEAVES OUT: `conflicts` — the players whose rows name two guilds.
+// That is a data-quality queue for whoever fixes the aliases, it names people
+// beside the word "wrong", and it is on the authenticated route for organizers
+// to fetch instead. The public answer is the tally.
+const streamRouter = express.Router();
+
+// One read however many people are watching, the way the roster cast does it.
+// A guild tally changes when a board is committed, so a few seconds stale is
+// invisible and a watch party is many browsers behind one address.
+const GUILD_CAST_MS = 15_000;
+let guildCache = null;
+
+streamRouter.get('/', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.json({ guilds: [], noGuild: 0, teams: [], rows: 0 });
+
+  try {
+    if (!guildCache || guildCache.id !== t.id || Date.now() - guildCache.at > GUILD_CAST_MS) {
+      const job = (async () => {
+        const rows = await fetchAll(
+          () => supabase.from('player_match_stats')
+            .select('id, guild_name, signup_id, player_name, team_id, kills, assists, damage_dealt, damage_taken, healing')
+            .eq('tournament_id', t.id)
+            .order('id', { ascending: true }),
+          { label: 'scoreboard rows' }
+        );
+        const [{ data: teams }, aliases] = await Promise.all([
+          supabase.from('teams').select('id, name, tag').eq('tournament_id', t.id),
+          guildAliases(),
+        ]);
+        // `conflicts` is dropped here rather than never computed — the tally is
+        // one function and the authenticated route wants all of it.
+        const { conflicts, ...tally } = guildTally(rows, aliases);
+        return { ...tally, teams: teams || [], rows: rows.length };
+      })();
+      guildCache = { id: t.id, at: Date.now(), job };
+    }
+    res.json(await guildCache.job);
+  } catch (err) {
+    guildCache = null;
+    console.error('guild cast failed:', err.message);
+    res.status(500).json({ error: 'Could not read the guilds.' });
+  }
+});
+
 /** One player's profile. Keyed on the signup id, never on a name. */
 router.get('/player/:signupId', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
@@ -674,4 +731,4 @@ organizerRouter.delete('/match/:key', async (req, res) => {
   res.json({ ok: true });
 });
 
-module.exports = { router, organizerRouter };
+module.exports = { router, streamRouter, organizerRouter };

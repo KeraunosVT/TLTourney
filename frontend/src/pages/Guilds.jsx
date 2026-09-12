@@ -5,10 +5,20 @@
 // that says anything about the world outside the tournament: the four teams are
 // drafted across guild lines, so this is the answer to "who actually came".
 //
-// Live, not a snapshot. Every number here comes from /api/stats/guilds, which
-// reads the committed rows and resolves spellings through guild_aliases at read
-// time — so committing a board changes this page on its next poll, and adding
-// an alias re-counts every board ever uploaded without touching one of them.
+// PUBLIC, like /rosters and /picks and for the same reason plus one of its own:
+// the people most interested in a guild tally are the guilds, and they are
+// largely not in the tournament, have no account, and are following a link out
+// of Discord. It reads /api/stream/guilds, which sits above requireAuth.
+//
+// The one thing it does NOT read publicly is the list of players whose rows
+// name two guilds. That is a fix-it queue, it puts names beside the word wrong,
+// and it is fetched from the authenticated route only when an organizer is
+// looking.
+//
+// Live, not a snapshot. The tally reads the committed rows and resolves
+// spellings through guild_aliases at read time — so committing a board changes
+// this page on its next poll, and adding an alias re-counts every board ever
+// uploaded without touching one of them.
 //
 // ── THE SPELLINGS ARE THE HARD PART ─────────────────────────────────────────
 // Guild names in this game are full of trailing glyphs — MILK°, JAILEDシ,
@@ -18,7 +28,11 @@
 // flags the players whose own rows disagree, which is how the next misread gets
 // found without anybody reading a list of thirty names.
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import axios from 'axios';
+import { Link } from 'react-router-dom';
 import api, { errorMessage } from '../api';
+import { useAuth } from '../auth';
+import { Sigil } from '../components/Brand';
 import { Panel, Pill, Button, Empty, Note } from '../components/ui';
 import { big } from './Match';
 
@@ -28,14 +42,18 @@ const NO_SIDE = 'var(--chart-none)';
 const HUES = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)'];
 
 export default function Guilds() {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
+  const [conflicts, setConflicts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [mode, setMode] = useState('total');
 
+  // Plain axios, not the api client: this page is reached without a session and
+  // the route it reads sits above requireAuth.
   const load = useCallback(async () => {
     try {
-      const { data: d } = await api.get('/api/stats/guilds');
+      const { data: d } = await axios.get('/api/stream/guilds');
       setData(d);
       setError(null);
     } catch (err) {
@@ -58,6 +76,18 @@ export default function Guilds() {
     const id = setInterval(load, 30000);
     return () => clearInterval(id);
   }, [load]);
+
+  // Organizers only, and on its own request. The public payload deliberately
+  // does not carry this — see the note at the top of the file. A failure here
+  // is silent: it is an extra panel, not the page.
+  useEffect(() => {
+    if (!user?.isOrganizer) { setConflicts([]); return undefined; }
+    let live = true;
+    api.get('/api/stats/guilds')
+      .then(({ data: d }) => { if (live) setConflicts(d.conflicts || []); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [user?.isOrganizer, data?.rows]);
 
   const teams = useMemo(() => (data?.teams || []), [data]);
 
@@ -84,22 +114,26 @@ export default function Guilds() {
     return Array.from({ length: scale / step + 1 }, (_, i) => i * step);
   }, [scale]);
 
-  if (loading) return <div className="p-8 text-sm text-ash">Loading…</div>;
+  if (loading) return <div className="p-8 text-sm text-ash">Loading the guilds…</div>;
 
-  const conflicts = data?.conflicts || [];
   const merged = guilds.filter((g) => g.spellings.length > 1);
   const players = guilds.reduce((n, g) => n + g.players, 0);
 
   return (
-    <div className="px-6 py-7 max-w-[1100px] mx-auto">
+    <div className="min-h-screen px-5 py-7 max-w-[1100px] mx-auto">
+      {/* Its own header, like /rosters: this page is reached from a link in
+          Discord as often as from the rail, and a page with no session has no
+          rail to sit in. */}
       <header className="flex items-end justify-between gap-5 flex-wrap mb-4">
-        <div>
-          <h1 className="font-display text-[27px]">Guilds</h1>
-          <p className="text-ash text-sm mt-1.5 max-w-[70ch]">
-            Every guild name read off a committed scoreboard, by how many players carried it.
-            The four teams are drafted across guild lines, so the split says which guild is
-            feeding which team.
-          </p>
+        <div className="flex items-center gap-3">
+          <Sigil size={38} />
+          <div>
+            <h1 className="font-display text-[26px] leading-none">Guilds</h1>
+            <p className="text-ash text-[13px] mt-1.5 max-w-[70ch]">
+              Every guild read off a committed scoreboard, by how many players carried it.
+              The teams are drafted across guild lines — the split says who is feeding whom.
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {data?.rows > 0 && <Pill tone="quiet">{data.rows} rows</Pill>}
@@ -108,6 +142,12 @@ export default function Guilds() {
               {conflicts.length} spelling{conflicts.length === 1 ? '' : 's'} to check
             </Pill>
           )}
+          <Link
+            to="/rosters"
+            className="text-[12.5px] text-ash hover:text-bone underline underline-offset-2"
+          >
+            rosters →
+          </Link>
         </div>
       </header>
 
@@ -223,7 +263,7 @@ export default function Guilds() {
           {conflicts.length > 0 && (
             <Panel
               title="Spellings that need a decision"
-              subtitle="These players' own rows name two guilds. One person cannot be in two on one night."
+              subtitle="Organizers only. These players' own rows name two guilds, and one person cannot be in two on one night."
               className="mt-4 border-crimson/40"
             >
               <div className="flex flex-col">

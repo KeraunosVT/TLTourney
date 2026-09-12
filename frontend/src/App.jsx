@@ -185,6 +185,13 @@ export default function App() {
                 in which party stays behind a captain's login. */}
             <Route path="/rosters" element={<Rosters />} />
 
+            {/* Public for the roster's reason and one of its own: a guild tally
+                is read mostly BY the guilds, who are not in the tournament and
+                have no account. It reads /api/stream/guilds, which answers with
+                counts and totals; the fix-it queue that names players stays on
+                the authenticated route and only appears for an organizer. */}
+            <Route path="/guilds" element={<Guilds />} />
+
             {/* THE FRONT DOOR, and the reason it is out here. This is the URL
                 that gets pasted into Discord, and it used to land a logged-out
                 visitor on a login page — the worst possible answer to "what is
@@ -200,7 +207,6 @@ export default function App() {
               <Route path="/match/:key" element={<Match />} />
               <Route path="/predictions" element={<Predictions />} />
               <Route path="/leaderboard" element={<Leaderboard />} />
-              <Route path="/guilds" element={<Guilds />} />
               <Route path="/player/:signupId" element={<Player />} />
               <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />
               {/* The builder gates itself rather than sitting behind

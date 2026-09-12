@@ -386,6 +386,9 @@ function Standings({ bracket }) {
 const LINKS = [
   { href: '/rosters', title: 'Rosters', body: 'Every team, split by Tank, DPS and Healer.' },
   { href: '/picks', title: 'Every pick', body: 'The full draft record, in order, filterable.' },
+  // No sign-in flag, and that is the point of it being here: the guilds are the
+  // audience for this and most of them are not in the tournament.
+  { href: '/guilds', title: 'Guilds', body: 'Who turned up, and which guild is feeding which team.' },
   { href: '/watch', title: 'Live scene', body: 'The broadcast view — the draft clock or the bracket.' },
   { href: '/bracket', title: 'Bracket', body: 'Every series, map and scoreboard.', signIn: true },
   { href: '/predictions', title: 'Predictions', body: 'Call the season and take a place on the leaderboard.', signIn: true },
