@@ -118,6 +118,9 @@ export default function Guilds() {
 
   const merged = guilds.filter((g) => g.spellings.length > 1);
   const players = guilds.reduce((n, g) => n + g.players, 0);
+  const anyUnplaced = guilds.some(
+    (g) => g.players > teams.reduce((n, t) => n + (g.byTeam[t.id] || 0), 0)
+  );
 
   return (
     <div className="min-h-screen px-5 py-7 max-w-[1100px] mx-auto">
@@ -195,6 +198,14 @@ export default function Guilds() {
                     {t.tag || t.name}
                   </span>
                 ))}
+                {/* Only when there is grey on screen to explain. A legend entry
+                    for a colour no bar uses reads as a fifth team. */}
+                {anyUnplaced && (
+                  <span className="inline-flex items-center gap-2 text-[12px] text-ash">
+                    <i className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: NO_SIDE }} />
+                    no side
+                  </span>
+                )}
               </div>
             )}
 
@@ -369,15 +380,32 @@ export default function Guilds() {
 function GuildRow({ guild, mode, scale, teams, hueOf }) {
   const width = (guild.players / scale) * 100;
 
-  const segments = mode === 'team'
-    ? teams
-      .map((t) => ({ id: t.id, label: t.tag || t.name, n: guild.byTeam[t.id] || 0, hue: hueOf.get(t.id) }))
-      .filter((s) => s.n > 0)
-    : [{ id: 'all', label: 'players', n: guild.players, hue: 'var(--color-crimson)' }];
+  // Anybody in this guild the split cannot place — their row's side never read.
+  // Drawn in grey rather than left off, so the stack always adds up to the
+  // number printed beside it; without it the bar was quietly short and nothing
+  // on the row said why.
+  const placed = teams.reduce((n, t) => n + (guild.byTeam[t.id] || 0), 0);
+  const unplaced = Math.max(0, guild.players - placed);
 
-  // In split mode the bar is as long as the segments actually drawn, not as
-  // long as `players` — a guild with somebody on no side would otherwise show a
-  // stack shorter than its own bar with an unexplained gap at the end.
+  const segments = mode === 'team'
+    ? [
+      ...teams
+        .map((t) => ({ id: t.id, label: t.tag || t.name, n: guild.byTeam[t.id] || 0, hue: hueOf.get(t.id) }))
+        .filter((s) => s.n > 0),
+      ...(unplaced ? [{ id: 'none', label: 'no side', n: unplaced, hue: NO_SIDE }] : []),
+    ]
+    // rgb(), because the --color-* tokens are the SPACE-SEPARATED TRIPLETS
+    // Tailwind composes alpha into ("163 18 25"), not colours. Handing one
+    // straight to `background` is invalid CSS, and invalid CSS is silent: the
+    // bar drew at the right width with no fill at all. The --chart-* tokens
+    // above are plain hex and do not need this, which is exactly why the team
+    // split kept working while Total came up blank.
+    : [{ id: 'all', label: 'players', n: guild.players, hue: 'rgb(var(--color-crimson))' }];
+
+  // The segments now account for everybody, including the unplaced, so the two
+  // agree — except where somebody was TRADED and played for two teams, which
+  // the tally reports and which makes the parts genuinely sum to more than the
+  // whole. The bar follows the parts so nothing is drawn outside it.
   const drawn = segments.reduce((n, s) => n + s.n, 0);
   const barWidth = mode === 'team' ? (drawn / scale) * 100 : width;
 
