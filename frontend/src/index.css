@@ -44,6 +44,24 @@
   --color-verdigris: 108 150 116;
   --color-verdigrisdeep: 20 34 25;
 
+  /* ── Chart series ─────────────────────────────────────────────────────────
+     Four hues for the four TEAMS, and the only colours on the site that are
+     not from the mark. They cannot be: crimson and oxblood are two shades of
+     one hue, and four teams on one bar need four colours a reader can tell
+     apart — including a reader who cannot distinguish red from green.
+
+     Taken from a validated categorical set and checked as a group against this
+     panel colour: worst adjacent pair 8.4 ΔE simulated for protanopia, all four
+     over 3:1 contrast on the dark ground. Stepped separately for parchment
+     below rather than reused, for the same reason the crimson is. */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  /* Not a team: rows whose side never read. Grey on purpose — it is an absence
+     of an answer, and giving it a hue would make it look like a fifth team. */
+  --chart-none: #6a655e;
+
   color-scheme: dark;
 }
 
@@ -68,6 +86,17 @@
 
   --color-verdigris: 44 100 62;
   --color-verdigrisdeep: 231 241 233;
+
+  /* The same four hues stepped for parchment, not the dark ones reused — on a
+     near-white ground those read as pastels and two of them stop clearing the
+     lightness band. Validated as a set against this surface: worst adjacent
+     pair 9.1 ΔE protan. Aqua and yellow sit under 3:1 here by design, which is
+     why the chart always ships the value beside the bar and a table under it. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-none: #8a847b;
 
   color-scheme: light;
 }

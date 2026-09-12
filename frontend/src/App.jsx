@@ -19,6 +19,7 @@ import Comp from './pages/Comp';
 import Bracket from './pages/Bracket';
 import Match from './pages/Match';
 import Leaderboard from './pages/Leaderboard';
+import Guilds from './pages/Guilds';
 import Predictions from './pages/Predictions';
 import Player from './pages/Player';
 import Watch from './pages/Watch';
@@ -73,6 +74,12 @@ function Shell() {
               watching as much as the people playing. */}
           <NavLink to="/predictions" className={link}>Predictions</NavLink>
           <NavLink to="/leaderboard" className={link}>Leaderboard</NavLink>
+          {/* Beside the leaderboard because it is the same data asked a
+              different way: that one adds a scoreboard up per player, this one
+              per guild. Everyone, like the leaderboard — a roster drafted
+              across guild lines is a thing the people in those guilds want to
+              see. */}
+          <NavLink to="/guilds" className={link}>Guilds</NavLink>
           {/* Only a captain has one, so only a captain is offered one. The
               server refuses it either way — this just keeps a dead link off
               everyone else's rail. */}
@@ -193,6 +200,7 @@ export default function App() {
               <Route path="/match/:key" element={<Match />} />
               <Route path="/predictions" element={<Predictions />} />
               <Route path="/leaderboard" element={<Leaderboard />} />
+              <Route path="/guilds" element={<Guilds />} />
               <Route path="/player/:signupId" element={<Player />} />
               <Route path="/board" element={<CaptainOnly><Board /></CaptainOnly>} />
               {/* The builder gates itself rather than sitting behind

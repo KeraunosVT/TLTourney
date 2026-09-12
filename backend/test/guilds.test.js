@@ -233,8 +233,63 @@ test('missing numbers count as zero rather than poisoning a guild', () => {
 });
 
 test('an empty board is an empty tally, not a crash', () => {
-  assert.deepStrictEqual(guildTally([], aliases), { guilds: [], noGuild: 0 });
-  assert.deepStrictEqual(guildTally(null, null), { guilds: [], noGuild: 0 });
+  assert.deepStrictEqual(guildTally([], aliases), { guilds: [], noGuild: 0, conflicts: [] });
+  assert.deepStrictEqual(guildTally(null, null), { guilds: [], noGuild: 0, conflicts: [] });
+});
+
+// ── The data arguing with itself ────────────────────────────────────────────
+// A player is on one scoreboard per game. If two of their games name two
+// guilds, that is a misread rather than a transfer — and it is the strongest
+// evidence there is that two spellings are one guild, because it comes from the
+// data disagreeing with itself instead of from somebody eyeballing a list.
+test('A PLAYER WHOSE ROWS NAME TWO GUILDS IS FLAGGED', () => {
+  const { conflicts } = guildTally([
+    grow('MILK', { signup_id: 'p1', player_name: 'xSp00n' }),
+    grow('MILK&deg;', { signup_id: 'p1', player_name: 'xSp00n' }),
+  ], aliases);
+
+  assert.strictEqual(conflicts.length, 1);
+  assert.strictEqual(conflicts[0].player_name, 'xSp00n');
+  assert.deepStrictEqual(conflicts[0].guilds, ['MILK', 'MILK&deg;']);
+  assert.deepStrictEqual(conflicts[0].spellings, ['MILK', 'MILK&deg;'],
+    'the raw spellings, which is what an alias row needs');
+});
+
+test('A PAIR THE ALIAS TABLE ALREADY FOLDS IS NOT A CONFLICT', () => {
+  // The point of checking after aliasing: an alias doing its job leaves one
+  // name, so what remains flagged is only the aliases nobody has written yet.
+  const { conflicts } = guildTally([
+    grow('MILK°', { signup_id: 'p1', player_name: 'xSp00n' }),
+    grow('MILK*', { signup_id: 'p1', player_name: 'xSp00n' }),
+  ], aliases);
+  assert.deepStrictEqual(conflicts, []);
+});
+
+test('two different people in two different guilds are not a conflict', () => {
+  const { conflicts } = guildTally([
+    grow('MILK', { signup_id: 'p1' }),
+    grow('Gear Gap', { signup_id: 'p2' }),
+  ], aliases);
+  assert.deepStrictEqual(conflicts, []);
+});
+
+test('a row with no guild does not argue with the rows that have one', () => {
+  // Nothing to disagree with — an unread guild is an absence, not a claim.
+  const { conflicts, noGuild } = guildTally([
+    grow('MILK', { signup_id: 'p1' }),
+    grow(null, { signup_id: 'p1' }),
+  ], aliases);
+  assert.strictEqual(noGuild, 1);
+  assert.deepStrictEqual(conflicts, []);
+});
+
+test('the same guild across many games is never a conflict', () => {
+  const { conflicts } = guildTally([
+    grow('Gear Gap', { signup_id: 'p1' }),
+    grow('Gear Gap', { signup_id: 'p1' }),
+    grow('  gear gap ', { signup_id: 'p1' }),
+  ], aliases);
+  assert.deepStrictEqual(conflicts, [], 'casing and padding are not a disagreement');
 });
 
 // ── The case this was all for ───────────────────────────────────────────────

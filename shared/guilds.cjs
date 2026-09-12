@@ -108,6 +108,9 @@ const num = (v) => {
  */
 function guildTally(rows, aliases) {
   const by = new Map();
+  // Which guilds each player's rows claim. One person cannot be in two guilds
+  // on one night, so two entries here is a misread — see `conflicts` below.
+  const claims = new Map();
   let noGuild = 0;
 
   (rows || []).forEach((r) => {
@@ -128,6 +131,18 @@ function guildTally(rows, aliases) {
 
     const e = by.get(key);
     const who = r.signup_id || `name:${guildKey(r.player_name)}`;
+
+    // Keyed the way the tally itself is keyed — on the lowercased canonical
+    // name. Keying on the display name would call `Gear Gap` and `gear gap` two
+    // guilds here while counting them as one above, and report a disagreement
+    // the tally does not have.
+    if (!claims.has(who)) {
+      claims.set(who, { player_name: r.player_name, guilds: new Map(), spellings: new Set() });
+    }
+    const claim = claims.get(who);
+    claim.guilds.set(key, name);
+    claim.spellings.add(normalizeGuild(r.guild_name));
+
     e.rows += 1;
     e.people.add(who);
     e.spellings.add(normalizeGuild(r.guild_name));
@@ -163,7 +178,28 @@ function guildTally(rows, aliases) {
     }))
     .sort((a, b) => b.players - a.players || b.kills - a.kills || a.name.localeCompare(b.name));
 
-  return { guilds, noGuild };
+  // ── The players whose own rows disagree ───────────────────────────────────
+  // The best evidence there is that two spellings are one guild, and it costs
+  // one pass. A player appears on one scoreboard per game; if game 1 says MILK
+  // and game 2 says MILK&deg;, that is not two guilds — one person cannot be in
+  // two on one night. It is the same trailing-glyph misread the alias table
+  // exists for, caught by the data arguing with itself rather than by somebody
+  // noticing two similar names in a list of thirty.
+  //
+  // Deliberately AFTER aliasing, so a pair already folded together never
+  // appears: an alias that is doing its job produces one name here, and what is
+  // left is the aliases nobody has written yet.
+  const conflicts = [...claims.values()]
+    .filter((c) => c.guilds.size > 1)
+    .map((c) => ({
+      player_name: c.player_name,
+      guilds: [...c.guilds.values()].sort(),
+      // The raw spellings behind them — the thing to paste into an alias row.
+      spellings: [...c.spellings].sort(),
+    }))
+    .sort((a, b) => a.player_name.localeCompare(b.player_name));
+
+  return { guilds, noGuild, conflicts };
 }
 
 module.exports = { normalizeGuild, guildKey, aliasMap, canonicalGuild, guildTally };
