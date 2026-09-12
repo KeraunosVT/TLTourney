@@ -106,46 +106,32 @@ const num = (v) => {
  * name where there is not, so an unmatched row still counts as somebody rather
  * than as nobody.
  */
+/** A fresh accumulator, shaped the way a guild is. */
+const bucket = (name) => ({
+  name, rows: 0, people: new Set(), spellings: new Set(), byTeam: new Map(), ...EMPTY,
+});
+
 function guildTally(rows, aliases) {
   const by = new Map();
   // Which guilds each player's rows claim. One person cannot be in two guilds
   // on one night, so two entries here is a misread — see `conflicts` below.
   const claims = new Map();
-  let noGuild = 0;
 
-  (rows || []).forEach((r) => {
-    const name = canonicalGuild(r.guild_name, aliases);
-    if (!name) { noGuild += 1; return; }
+  // The rows whose guild never read, accumulated exactly like a guild rather
+  // than counted. They are not a guild and must never sort among them — but
+  // they are a real set of players with real numbers, and "how many turned up
+  // with nothing in that column" is a question the tally should be able to
+  // answer with more than a total.
+  const nobody = bucket('Guildless');
 
-    const key = name.toLowerCase();
-    if (!by.has(key)) {
-      by.set(key, {
-        name,
-        rows: 0,
-        people: new Set(),
-        spellings: new Set(),
-        byTeam: new Map(),
-        ...EMPTY,
-      });
-    }
-
-    const e = by.get(key);
-    const who = r.signup_id || `name:${guildKey(r.player_name)}`;
-
-    // Keyed the way the tally itself is keyed — on the lowercased canonical
-    // name. Keying on the display name would call `Gear Gap` and `gear gap` two
-    // guilds here while counting them as one above, and report a disagreement
-    // the tally does not have.
-    if (!claims.has(who)) {
-      claims.set(who, { player_name: r.player_name, guilds: new Map(), spellings: new Set() });
-    }
-    const claim = claims.get(who);
-    claim.guilds.set(key, name);
-    claim.spellings.add(normalizeGuild(r.guild_name));
-
+  // One row into one bucket. Shared by the guilds and by the guildless, so the
+  // two can never drift into counting differently — a guildless bar drawn from
+  // rows beside guild bars drawn from people would be a chart comparing two
+  // different things without saying so.
+  const add = (e, r, who) => {
     e.rows += 1;
     e.people.add(who);
-    e.spellings.add(normalizeGuild(r.guild_name));
+    if (String(r.guild_name || '').trim()) e.spellings.add(normalizeGuild(r.guild_name));
 
     // PEOPLE PER TEAM, not rows per team. These sat beside `players` as though
     // they were the same kind of number, and counted rows — so on a night where
@@ -160,22 +146,50 @@ function guildTally(rows, aliases) {
     e.damage_dealt += num(r.damage_dealt);
     e.damage_taken += num(r.damage_taken);
     e.healing += num(r.healing);
+  };
+
+  (rows || []).forEach((r) => {
+    const name = canonicalGuild(r.guild_name, aliases);
+    const who = r.signup_id || `name:${guildKey(r.player_name)}`;
+
+    // No guild read. Counted in full, and deliberately NOT recorded as a claim:
+    // an unread column is an absence, and it cannot disagree with the rows that
+    // do name a guild.
+    if (!name) { add(nobody, r, who); return; }
+
+    const key = name.toLowerCase();
+    if (!by.has(key)) by.set(key, bucket(name));
+
+    // Keyed the way the tally itself is keyed — on the lowercased canonical
+    // name. Keying on the display name would call `Gear Gap` and `gear gap` two
+    // guilds here while counting them as one above, and report a disagreement
+    // the tally does not have.
+    if (!claims.has(who)) {
+      claims.set(who, { player_name: r.player_name, guilds: new Map(), spellings: new Set() });
+    }
+    const claim = claims.get(who);
+    claim.guilds.set(key, name);
+    claim.spellings.add(normalizeGuild(r.guild_name));
+
+    add(by.get(key), r, who);
+  });
+
+  const finish = ({ people, spellings, byTeam, ...e }) => ({
+    ...e,
+    players: people.size,
+    spellings: [...spellings].sort(),
+    byTeam: Object.fromEntries([...byTeam].map(([team, who]) => [team, who.size])),
+    // Somebody TRADED mid-season played for two teams, so the per-team counts
+    // can add up to more than `players`. Rare and real, and said out loud
+    // because a stacked bar drawn from byTeam would otherwise silently run
+    // past the length of its own bar.
+    playedForTwo: [...people].filter(
+      (p) => [...byTeam.values()].filter((who) => who.has(p)).length > 1
+    ).length,
   });
 
   const guilds = [...by.values()]
-    .map(({ people, spellings, byTeam, ...e }) => ({
-      ...e,
-      players: people.size,
-      spellings: [...spellings].sort(),
-      byTeam: Object.fromEntries([...byTeam].map(([team, who]) => [team, who.size])),
-      // Somebody TRADED mid-season played for two teams, so the per-team counts
-      // can add up to more than `players`. Rare and real, and said out loud
-      // because a stacked bar drawn from byTeam would otherwise silently run
-      // past the length of its own bar.
-      playedForTwo: [...people].filter(
-        (p) => [...byTeam.values()].filter((who) => who.has(p)).length > 1
-      ).length,
-    }))
+    .map(finish)
     .sort((a, b) => b.players - a.players || b.kills - a.kills || a.name.localeCompare(b.name));
 
   // ── The players whose own rows disagree ───────────────────────────────────
@@ -199,7 +213,18 @@ function guildTally(rows, aliases) {
     }))
     .sort((a, b) => a.player_name.localeCompare(b.player_name));
 
-  return { guilds, noGuild, conflicts };
+  return {
+    guilds,
+    // OUTSIDE `guilds`, not sorted among them. Guildless is not a guild, and a
+    // caller ranking guilds by size must never be able to hand back "Guildless"
+    // as the fourth biggest. Null when every row named one, so a page can leave
+    // the bar off entirely rather than drawing an empty one.
+    guildless: nobody.rows > 0 ? finish(nobody) : null,
+    // The row count, kept as it was — the pages that only wanted a footnote
+    // still read this, and it is the same number as guildless.rows.
+    noGuild: nobody.rows,
+    conflicts,
+  };
 }
 
 module.exports = { normalizeGuild, guildKey, aliasMap, canonicalGuild, guildTally };

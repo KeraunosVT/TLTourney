@@ -101,13 +101,21 @@ export default function Guilds() {
 
   const guilds = data?.guilds || [];
 
+  // Not a guild, and never sorted among them — it is appended after the last
+  // one, drawn in the same grey as an unread side, and labelled for what it is.
+  // Shown as a BAR rather than a footnote because it is a real group of players
+  // with real numbers, and a count in small print under a chart reads as a
+  // caveat rather than as part of the picture.
+  const guildless = data?.guildless || null;
+
   // The axis is drawn to a round number above the tallest bar, so the ticks are
-  // tens rather than whatever the biggest guild happens to be.
+  // tens rather than whatever the biggest guild happens to be. The guildless
+  // count is in it: if they ever outnumber a guild, the bar has to fit.
   const scale = useMemo(() => {
-    const top = Math.max(1, ...guilds.map((g) => g.players));
+    const top = Math.max(1, ...guilds.map((g) => g.players), guildless?.players || 0);
     const step = top <= 20 ? 5 : 10;
     return Math.ceil(top / step) * step;
-  }, [guilds]);
+  }, [guilds, guildless]);
 
   const ticks = useMemo(() => {
     const step = scale <= 20 ? 5 : 10;
@@ -237,6 +245,16 @@ export default function Guilds() {
                       hueOf={hueOf}
                     />
                   ))}
+                  {guildless && (
+                    <GuildRow
+                      guild={guildless}
+                      mode={mode}
+                      scale={scale}
+                      teams={teams}
+                      hueOf={hueOf}
+                      guildless
+                    />
+                  )}
                 </div>
               </div>
 
@@ -257,11 +275,12 @@ export default function Guilds() {
               <p className="text-[11px] text-dim mt-5">players</p>
             </div>
 
-            {data?.noGuild > 0 && (
+            {guildless && (
               <p className="px-4 pb-4 text-[11.5px] text-dim max-w-[76ch]">
-                {data.noGuild} row{data.noGuild === 1 ? '' : 's'} carried no guild at all and
-                {data.noGuild === 1 ? ' is' : ' are'} in none of the bars above — a column that
-                never read, kept out rather than folded into anybody.
+                Guildless is not a guild — it is {guildless.players}{' '}
+                player{guildless.players === 1 ? '' : 's'} across {guildless.rows}{' '}
+                row{guildless.rows === 1 ? '' : 's'} whose guild column never read, kept apart
+                from the guilds rather than folded into any of them.
               </p>
             )}
           </Panel>
@@ -303,7 +322,8 @@ export default function Guilds() {
 
           <Panel
             title="The same numbers, in full"
-            subtitle={`${guilds.length} guild${guilds.length === 1 ? '' : 's'} · ${players} players · totals across every game`}
+            subtitle={`${guilds.length} guild${guilds.length === 1 ? '' : 's'} · ${players} players`
+              + `${guildless ? ` · ${guildless.players} guildless` : ''} · totals across every game`}
             className="mt-4"
           >
             <div className="overflow-x-auto">
@@ -327,9 +347,13 @@ export default function Guilds() {
                   </tr>
                 </thead>
                 <tbody>
-                  {guilds.map((g) => (
-                    <tr key={g.name} className="border-b border-line/40 hover:bg-panelup/50">
-                      <td className="px-3 py-1.5">
+                  {[...guilds, ...(guildless ? [guildless] : [])].map((g) => (
+                    <tr
+                      key={g.name}
+                      className={`border-b border-line/40 hover:bg-panelup/50
+                        ${g === guildless ? 'border-t border-line' : ''}`}
+                    >
+                      <td className={`px-3 py-1.5 ${g === guildless ? 'text-ash italic' : ''}`}>
                         {g.name}
                         {/* What fed this bar. A guild counted from three
                             spellings is the alias table working, and it should
@@ -377,7 +401,7 @@ export default function Guilds() {
 // One bar. Split mode stacks the teams with a 2px gap of the panel showing
 // through between them — the separation is the gap, never a stroke, which would
 // add ink that is not data.
-function GuildRow({ guild, mode, scale, teams, hueOf }) {
+function GuildRow({ guild, mode, scale, teams, hueOf, guildless = false }) {
   const width = (guild.players / scale) * 100;
 
   // Anybody in this guild the split cannot place — their row's side never read.
@@ -400,7 +424,16 @@ function GuildRow({ guild, mode, scale, teams, hueOf }) {
     // bar drew at the right width with no fill at all. The --chart-* tokens
     // above are plain hex and do not need this, which is exactly why the team
     // split kept working while Total came up blank.
-    : [{ id: 'all', label: 'players', n: guild.players, hue: 'rgb(var(--color-crimson))' }];
+    //
+    // The guildless bar takes the grey rather than the accent in both modes:
+    // it is the absence of an answer, and giving it the brand colour would put
+    // it in the chart as though it were the eighteenth guild.
+    : [{
+      id: 'all',
+      label: 'players',
+      n: guild.players,
+      hue: guildless ? NO_SIDE : 'rgb(var(--color-crimson))',
+    }];
 
   // The segments now account for everybody, including the unplaced, so the two
   // agree — except where somebody was TRADED and played for two teams, which
@@ -409,7 +442,9 @@ function GuildRow({ guild, mode, scale, teams, hueOf }) {
   const drawn = segments.reduce((n, s) => n + s.n, 0);
   const barWidth = mode === 'team' ? (drawn / scale) * 100 : width;
 
-  const title = `${guild.name} — ${guild.players} player${guild.players === 1 ? '' : 's'}`
+  const title = (guildless
+    ? `${guild.players} player${guild.players === 1 ? '' : 's'} whose guild never read`
+    : `${guild.name} — ${guild.players} player${guild.players === 1 ? '' : 's'}`)
     + (segments.length && mode === 'team'
       ? `: ${segments.map((s) => `${s.n} ${s.label}`).join(', ')}` : '')
     + `. ${guild.kills} kills.`
@@ -417,11 +452,16 @@ function GuildRow({ guild, mode, scale, teams, hueOf }) {
 
   return (
     <div
-      className="grid items-center gap-3 py-[3px] rounded-sm hover:bg-crimson/[0.07]"
+      className={`grid items-center gap-3 py-[3px] rounded-sm hover:bg-crimson/[0.07]
+        ${guildless ? 'mt-1.5 pt-2 border-t border-line/50' : ''}`}
       style={{ gridTemplateColumns: 'var(--label-w) 1fr var(--value-w)' }}
       title={title}
     >
-      <div className="text-[12.5px] text-right truncate">{guild.name}</div>
+      {/* Set apart above by a rule and below by its wording: it is the one row
+          in this chart that is not a guild. */}
+      <div className={`text-[12.5px] text-right truncate ${guildless ? 'text-ash italic' : ''}`}>
+        {guild.name}
+      </div>
       <div className="flex gap-[2px] h-[15px]" style={{ width: `${barWidth}%` }}>
         {segments.map((s, i) => (
           <div

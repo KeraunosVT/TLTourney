@@ -157,6 +157,56 @@ test('rows with no guild are COUNTED, not listed as a guild', () => {
   assert.ok(!guilds.some((g) => g.name === 'Unknown' || g.name === ''));
 });
 
+// ── Guildless ───────────────────────────────────────────────────────────────
+// Counted the same way a guild is, so it can be drawn as a bar beside them —
+// but returned OUTSIDE the list, because it is not one.
+test('the guildless are tallied like a guild: people, teams and totals', () => {
+  const { guildless } = guildTally([
+    grow(null, { signup_id: 'p1', team_id: 'A', kills: 3 }),
+    grow(null, { signup_id: 'p1', team_id: 'A', kills: 4 }),   // same player, game 2
+    grow('', { signup_id: 'p2', team_id: 'B', kills: 5 }),
+  ], aliases);
+
+  assert.strictEqual(guildless.name, 'Guildless');
+  assert.strictEqual(guildless.rows, 3);
+  assert.strictEqual(guildless.players, 2, 'people, not rows — as everywhere else');
+  assert.deepStrictEqual(guildless.byTeam, { A: 1, B: 1 });
+  assert.strictEqual(guildless.kills, 12);
+});
+
+test('GUILDLESS IS NEVER ONE OF THE GUILDS', () => {
+  // A caller ranking guilds by size must not be able to hand back "Guildless"
+  // as the fourth biggest, however many rows it holds.
+  const { guilds, guildless } = guildTally([
+    grow(null, { signup_id: 'p1' }), grow(null, { signup_id: 'p2' }),
+    grow(null, { signup_id: 'p3' }), grow('MILK', { signup_id: 'p4' }),
+  ], aliases);
+  assert.deepStrictEqual(guilds.map((g) => g.name), ['MILK']);
+  assert.strictEqual(guildless.players, 3, 'bigger than the only real guild, and still not in it');
+});
+
+test('a board where everybody named a guild has no guildless entry at all', () => {
+  // Null rather than a zeroed row, so a page leaves the bar off instead of
+  // drawing an empty one labelled Guildless.
+  const { guildless, noGuild } = guildTally([grow('MILK', { signup_id: 'p1' })], aliases);
+  assert.strictEqual(guildless, null);
+  assert.strictEqual(noGuild, 0);
+});
+
+test('the guildless carry no spellings, because there was nothing to read', () => {
+  const { guildless } = guildTally([grow(null, { signup_id: 'p1' }), grow('   ', { signup_id: 'p2' })], aliases);
+  assert.deepStrictEqual(guildless.spellings, []);
+});
+
+test('noGuild still reports the row count it always did', () => {
+  const { guildless, noGuild } = guildTally([
+    grow(null, { signup_id: 'p1' }), grow(null, { signup_id: 'p1' }),
+  ], aliases);
+  assert.strictEqual(noGuild, 2, 'rows');
+  assert.strictEqual(guildless.players, 1, 'one person on both of them');
+  assert.strictEqual(noGuild, guildless.rows);
+});
+
 test('THE SPLIT BY TEAM COUNTS PEOPLE, NOT ROWS', () => {
   // These sit beside `players` and have to be the same kind of number. Counting
   // rows agreed with it exactly while every team had played once, then a second
@@ -233,8 +283,9 @@ test('missing numbers count as zero rather than poisoning a guild', () => {
 });
 
 test('an empty board is an empty tally, not a crash', () => {
-  assert.deepStrictEqual(guildTally([], aliases), { guilds: [], noGuild: 0, conflicts: [] });
-  assert.deepStrictEqual(guildTally(null, null), { guilds: [], noGuild: 0, conflicts: [] });
+  const empty = { guilds: [], guildless: null, noGuild: 0, conflicts: [] };
+  assert.deepStrictEqual(guildTally([], aliases), empty);
+  assert.deepStrictEqual(guildTally(null, null), empty);
 });
 
 // ── The data arguing with itself ────────────────────────────────────────────
