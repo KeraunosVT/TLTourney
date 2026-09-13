@@ -84,6 +84,18 @@ export default function Bracket() {
 
   const canRecord = !!user?.isOrganizer;
 
+  // Where each team finished the round robin. THAT is what placed them in this
+  // bracket — /generate maps the table's `place` onto the engine's seed slots —
+  // so it is the number the cards show. teams.seed is the draft order and says
+  // nothing about the bracket once the seeding stage has been played.
+  //
+  // Null when there is no seeding stage, so the cards fall back to teams.seed
+  // for a tournament drawn straight from draft order.
+  const places = new Map(
+    (state?.seeding?.standings || []).map((r) => [r.teamId, r.place])
+  );
+  const placeOf = places.size ? (id) => places.get(id) ?? null : null;
+
   return (
     <div className="px-6 py-7">
       <header className="flex items-end justify-between gap-5 flex-wrap mb-4 max-w-[1400px]">
@@ -141,6 +153,7 @@ export default function Bracket() {
           onPick={record}
           canRecord={canRecord}
           busy={busy}
+          placeOf={placeOf}
         />
       )}
 
@@ -159,11 +172,11 @@ export default function Bracket() {
         </Panel>
       ) : (
         <div className="mt-4 flex flex-col gap-5">
-          <Half title="Winners" columns={grouped.W} onPick={record} canRecord={canRecord} busy={busy} />
+          <Half title="Winners" columns={grouped.W} onPick={record} canRecord={canRecord} busy={busy} placeOf={placeOf} />
           {grouped.L.length > 0 && (
-            <Half title="Losers" columns={grouped.L} onPick={record} canRecord={canRecord} busy={busy} tone="loser" />
+            <Half title="Losers" columns={grouped.L} onPick={record} canRecord={canRecord} busy={busy} placeOf={placeOf} tone="loser" />
           )}
-          <Half title="Grand Final" columns={grouped.GF} onPick={record} canRecord={canRecord} busy={busy} tone="gf" />
+          <Half title="Grand Final" columns={grouped.GF} onPick={record} canRecord={canRecord} busy={busy} placeOf={placeOf} tone="gf" />
         </div>
       )}
     </div>
@@ -175,7 +188,7 @@ export default function Bracket() {
 // stage is FOR — the fixtures are how it got there. Everyone reading this page
 // during the group stage is asking "who is seeding first", and answering that
 // below six match cards would be answering it last.
-function Seeding({ seeding, columns, onPick, canRecord, busy }) {
+function Seeding({ seeding, columns, onPick, canRecord, busy, placeOf }) {
   const done = seeding.done;
   return (
     <section className="mt-4 flex flex-col gap-3">
@@ -237,6 +250,7 @@ function Seeding({ seeding, columns, onPick, canRecord, busy }) {
         onPick={onPick}
         canRecord={canRecord}
         busy={busy}
+        placeOf={placeOf}
         tone="seeding"
       />
     </section>
@@ -246,7 +260,7 @@ function Seeding({ seeding, columns, onPick, canRecord, busy }) {
 // ── One half of the bracket ─────────────────────────────────────────────────
 // Scrolls horizontally on its own rather than scrolling the page: a sixteen-team
 // bracket is six columns wide and the page around it should stay put.
-function Half({ title, columns, onPick, canRecord, busy, tone = 'winner' }) {
+function Half({ title, columns, onPick, canRecord, busy, tone = 'winner', placeOf }) {
   const edge = {
     winner: 'border-line', loser: 'border-oxblood/40',
     gf: 'border-crimson/40', seeding: 'border-line',
@@ -263,7 +277,7 @@ function Half({ title, columns, onPick, canRecord, busy, tone = 'winner' }) {
               </div>
               <div className="flex-1 flex flex-col justify-around gap-2">
                 {col.matches.map((m) => (
-                  <MatchCard key={m.key} m={m} onPick={onPick} canRecord={canRecord} busy={busy} />
+                  <MatchCard key={m.key} m={m} onPick={onPick} canRecord={canRecord} busy={busy} placeOf={placeOf} />
                 ))}
               </div>
             </div>
@@ -274,7 +288,7 @@ function Half({ title, columns, onPick, canRecord, busy, tone = 'winner' }) {
   );
 }
 
-function MatchCard({ m, onPick, canRecord, busy }) {
+function MatchCard({ m, onPick, canRecord, busy, placeOf }) {
   // Missing weapons screenshots, counted. Only for matches that have two teams
   // and are actually played — a pending slot has nobody to be missing one, and
   // a walkover was never played.
@@ -351,7 +365,19 @@ function MatchCard({ m, onPick, canRecord, busy }) {
               ${canClick ? 'hover:bg-crimson/12 cursor-pointer' : 'cursor-default'}
               ${won ? 'bg-verdigris/10' : ''} ${lost ? 'opacity-45' : ''}`}
           >
-            <span className="mono text-[10px] text-ash w-4 shrink-0">{team?.seed ?? ''}</span>
+            {/* THE SEEDING TABLE'S PLACE, not teams.seed. teams.seed is the
+                DRAFT order and stops describing anything once the round robin
+                has been played — it showed The Hamstars as "4" while they sat
+                in the one seed, having gone 3-0. The bracket is placed off the
+                table (see /generate), so this is the number that explains the
+                pairing. Falls back to teams.seed for a tournament drawn
+                straight from draft order, which has no table to read. */}
+            <span
+              className="mono text-[10px] text-ash w-4 shrink-0"
+              title={placeOf?.(team?.id) ? 'Seeding-table place' : 'Draft seed'}
+            >
+              {placeOf?.(team?.id) ?? team?.seed ?? ''}
+            </span>
             <span className={`text-[12.5px] truncate flex-1 ${won ? 'text-bone' : ''} ${lost ? 'line-through' : ''}`}>
               {team ? team.name : <span className="text-dim italic">{slotHint(m[`slot_${slot}`])}</span>}
             </span>
