@@ -12,6 +12,7 @@ const multer = require('multer');
 const { supabase, currentTournament, audit } = require('./db');
 const {
   generateBracket, generateRoundRobin, roundRobinStandings, applyResult, roundLabel,
+  DEFAULT_BEST_OF,
 } = require('../shared/bracket.cjs');
 const { seriesResult, gameSlots, isBestOf } = require('../shared/series.cjs');
 const { isMap, available, isPlayable, banList, banProblem } = require('../shared/maps.cjs');
@@ -69,11 +70,24 @@ const fromEngine = (m, tournamentId) => ({
   kind: m.status || 'match',
   advances: m.advances || null,
   is_reset: !!m.reset,
-  // Only the grand final sets this; everything else takes the column default
-  // of 3 (migration 013). Written at generation rather than patched afterwards
-  // so a freshly drawn bracket is already correct — a best-of that is fixed up
-  // by a second statement is one that is wrong if the second statement fails.
-  ...(m.bestOf ? { best_of: m.bestOf } : {}),
+  // ALWAYS WRITTEN, never left to the column default — the same trap as `kind`
+  // above, and this one got past the comment explaining it.
+  //
+  // Only the grand final sets bestOf, so omitting the key elsewhere produced a
+  // batch where SOME rows carried best_of and the rest did not. supabase-js
+  // builds its `columns` parameter from the union of every row's keys, so
+  // PostgREST was told the payload has a best_of column, found nothing in the
+  // other rows, and wrote NULL into a not-null column. The whole insert failed
+  // with "null value in column best_of violates not-null constraint" — naming
+  // the column, but not the row and not the cause.
+  //
+  // The seeding stage never hit it because the engine sets bestOf on every
+  // round-robin fixture, so those keys are uniform.
+  //
+  // Written at generation rather than patched afterwards, so a freshly drawn
+  // bracket is already correct — a best-of fixed up by a second statement is
+  // one that stays wrong if the second statement fails.
+  best_of: m.bestOf || DEFAULT_BEST_OF,
 });
 
 // ── Weapon screenshots ──────────────────────────────────────────────────────
@@ -1378,4 +1392,10 @@ organizerRouter.delete('/', async (req, res) => {
   res.json({ ok: true, exists: false, matches: [], teams: [] });
 });
 
-module.exports = { router, streamRouter, organizerRouter, bracketState, settle, featured };
+module.exports = {
+  router, streamRouter, organizerRouter, bracketState, settle, featured,
+  // Exported for the test that every generated row carries every column a
+  // batch insert needs. A mixed-key batch is the failure mode this module has
+  // now hit twice (kind, then best_of), and it is invisible until the insert.
+  fromEngine,
+};

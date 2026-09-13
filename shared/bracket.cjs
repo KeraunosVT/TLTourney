@@ -39,6 +39,12 @@ const keyFor = (bracket, round, idx) => `${bracket}${round}-${idx}`;
 // The grand final is longer than everything before it.
 const GRAND_FINAL_BEST_OF = 5;
 
+// Every other bracket match. Kept in step with migrations/013's column default
+// — and named here because the writer can no longer rely on that default: a
+// batch insert where only SOME rows carry best_of writes NULL into the rest
+// (see fromEngine in backend/bracket.js), so every row has to say it.
+const DEFAULT_BEST_OF = 3;
+
 // A seeding fixture is a SINGLE GAME. Six fixtures at best-of-three is
 // eighteen games to decide a seeding order, which is more play than the
 // double-elimination bracket those seeds feed into. One game each keeps the
@@ -541,5 +547,5 @@ function columns(matches, bracket) {
 module.exports = {
   generateBracket, generateRoundRobin, roundRobinStandings,
   applyResult, seedOrder, bracketSize, roundLabel, columns, winnersSide,
-  GRAND_FINAL_BEST_OF, SEEDING_BEST_OF, SEED, WINNER, LOSER, keyFor,
+  GRAND_FINAL_BEST_OF, SEEDING_BEST_OF, DEFAULT_BEST_OF, SEED, WINNER, LOSER, keyFor,
 };
