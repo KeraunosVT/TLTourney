@@ -23,16 +23,22 @@
 import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Sigil } from '../components/Brand';
+import AuthNotice, { authReason } from '../components/AuthNotice';
+import { DISCORD_INVITE } from '../lib/discord';
 import { useCountdown, mmss, whenLocal, countdownLabel } from '../lib/clock';
 import { pollMs, bracketPollMs } from '../lib/stream';
-
-const DISCORD_INVITE = 'https://discord.gg/p7WPgFku9K';
 
 export default function Home() {
   const [t, setT] = useState(null);
   const [draft, setDraft] = useState(null);
   const [bracket, setBracket] = useState(null);
   const [failed, setFailed] = useState(null);
+
+  // A refused login lands HERE, not on the login page — the callback redirects
+  // to APP_URL and APP_URL is the front door. Without this the refusal is
+  // silent and the user has no way to learn why signing in keeps returning
+  // them to this page. Read once: it only changes on a full navigation.
+  const [reason] = useState(authReason);
 
   // The tournament itself changes when an organizer presses something. Read
   // once; there is nothing to poll for.
@@ -62,12 +68,23 @@ export default function Home() {
     return () => clearInterval(id);
   }, [bracket?.exists, bracket?.champion?.id, loadBracket]);
 
-  if (failed && !t) return <div className="p-8 text-sm text-oxblood">{failed}</div>;
+  // The refusal outlives a dead API on purpose: "you are not in the Discord" is
+  // still the answer the person in front of this page needs, and it is the only
+  // one that gets them out of the loop.
+  if (failed && !t) {
+    return (
+      <div className="max-w-[560px] mx-auto px-5 py-8 flex flex-col gap-4">
+        <AuthNotice reason={reason} />
+        <div className="text-sm text-oxblood">{failed}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen">
       <div className="max-w-[1080px] mx-auto px-5 py-8 flex flex-col gap-6">
         <Masthead t={t} />
+        <AuthNotice reason={reason} />
         <Hero t={t} draft={draft} bracket={bracket} />
         <Watch t={t} />
         <Standings bracket={bracket} />

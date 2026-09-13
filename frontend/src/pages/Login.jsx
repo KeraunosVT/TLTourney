@@ -1,52 +1,29 @@
 import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import api from '../api';
 import { LockupVertical } from '../components/Brand';
+import AuthNotice, { authReason } from '../components/AuthNotice';
+import { DISCORD_INVITE } from '../lib/discord';
 import { hostOf } from '@shared/streams.cjs';
 
-// The tournament Discord. Signing in checks membership of this server, so
-// somebody who hasn't joined it is refused before they get anywhere — which is
-// why the invite is step one on this page rather than a footnote.
-//
-// ⚠️  This must be a NEVER-EXPIRING invite. A default Discord invite dies after
-// 7 days, and an expired one here doesn't look broken: people land on "Invite
-// Invalid", assume the tournament is closed, and leave.
-const DISCORD_INVITE = 'https://discord.gg/p7WPgFku9K';
-
-// Why a login attempt bounced. Discord sends people back here with ?auth=…
-const REASONS = {
-  not_member: {
-    title: 'You need to be in the tournament Discord',
-    body: 'Discord says you are not a member of the server this site is bound to. Join it, then come '
-      + 'back and sign in. If you are certain you are already in it, the site is pointing at the '
-      + 'wrong server — tell an organizer.',
-    // The one refusal with an obvious fix, so the fix goes in the message
-    // rather than making them find it again further down the page.
-    invite: true,
-    organizer: 'DISCORD_GUILD_ID is the server this checks against. A login that works for you and '
-      + 'nobody else usually means it names a server only you are in.',
-  },
-  forbidden: {
-    title: "Your roles don't let you sign in",
-    body: 'You are in the server, but the site is set to admit only certain roles and you do not have '
-      + 'one of them. An organizer can fix this.',
-    organizer: 'DISCORD_ALLOWED_ROLE_IDS is set. Leave it EMPTY to let any member of the server sign '
-      + 'in — that is the usual setting for an open tournament.',
-  },
-  error: {
-    title: "That didn't work",
-    body: 'Something went wrong talking to Discord. Try again — if it keeps happening, tell an organizer.',
-    organizer: 'Usually DISCORD_REDIRECT_URI not matching the redirect registered on the Discord '
-      + 'application, character for character. The server log names the cause.',
-  },
-};
+// Signing in checks membership of the tournament Discord, so somebody who
+// hasn't joined it is refused before they get anywhere — which is why the
+// invite is step one on this page rather than a footnote.
 
 export default function Login() {
   const [tournament, setTournament] = useState(null);
   const [reason, setReason] = useState(null);
 
+  // Where to put them back afterwards. The gate renders this page IN PLACE of
+  // the route they asked for, without changing the URL, so the location still
+  // says /leaderboard and the round trip can end where it started instead of
+  // on the front page.
+  const { pathname, search } = useLocation();
+  const returnTo = `${pathname}${search}`;
+  const signInHref = `/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
+
   useEffect(() => {
-    const auth = new URLSearchParams(window.location.search).get('auth');
-    if (auth && REASONS[auth]) setReason(REASONS[auth]);
+    setReason(authReason());
     api.get('/api/tournament')
       .then(({ data }) => setTournament(data.tournament))
       .catch(() => {});
@@ -66,33 +43,7 @@ export default function Login() {
           )}
         </div>
 
-        {reason && (
-          <div className="mb-5 rounded border border-oxblood/50 bg-oxblooddeep px-4 py-3">
-            <div className="text-[13.5px] font-semibold text-crimsonbright">{reason.title}</div>
-            <p className="text-xs text-ash mt-1 leading-relaxed">{reason.body}</p>
-            {reason.invite && (
-              <a
-                href={DISCORD_INVITE}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="inline-flex mt-2.5 px-3 py-1.5 rounded border border-crimson/60
-                           bg-crimson/15 text-crimsonbright font-semibold text-xs
-                           hover:bg-crimson/25 transition-colors"
-              >
-                Join the Discord ↗
-              </a>
-            )}
-            {/* The fix, for whoever is running the site. Shown to everybody
-                because the person who hits this is the one who reports it, and
-                a report that names the setting gets fixed the same day. */}
-            {reason.organizer && (
-              <p className="text-[11px] text-ash/80 mt-2 pt-2 border-t border-oxblood/30 leading-relaxed">
-                <span className="uppercase tracking-[0.1em] font-semibold">For the organizer:</span>{' '}
-                {reason.organizer}
-              </p>
-            )}
-          </div>
-        )}
+        {reason && <div className="mb-5"><AuthNotice reason={reason} /></div>}
 
         {/* Two numbered steps rather than one button and a note. Signing in
             without having joined the server doesn't fail gently — Discord
@@ -133,7 +84,7 @@ export default function Login() {
                 nothing is posted on your behalf.
               </p>
               <a
-                href="/api/auth/login"
+                href={signInHref}
                 className="inline-flex items-center justify-center gap-2 w-full px-4 py-2.5 rounded
                            border border-crimson/60 bg-crimson/15 text-crimsonbright font-semibold text-sm
                            hover:bg-crimson/25 transition-colors"

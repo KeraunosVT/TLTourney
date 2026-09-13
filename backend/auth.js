@@ -52,7 +52,45 @@ const VERIFIED_ROLE_ID = (process.env.DISCORD_VERIFIED_ROLE_ID || '').trim();
 
 const COOKIE_NAME = 'tlt_session';
 const STATE_COOKIE = 'tlt_oauth_state';
+const RETURN_COOKIE = 'tlt_oauth_return';
 const SESSION_DAYS = 7;
+
+// APP_URL is written both ways in the wild — "/" locally, "https://site.com"
+// live — and the difference matters once anything is appended to it. Joining
+// "/" to "/leaderboard" by concatenation yields "//leaderboard", which a
+// browser reads as a PROTOCOL-RELATIVE URL and follows to a host called
+// "leaderboard". Strip the trailing slash once, here, and every caller appends
+// a path that starts with exactly one.
+const APP_BASE = String(APP_URL).replace(/\/+$/, '');
+const appUrl = (suffix = '/') => `${APP_BASE}${suffix}` || '/';
+
+// Where to send somebody after they sign in.
+//
+// This is an OPEN REDIRECT if it is taken on trust: anything absolute, and a
+// login link on our own domain becomes a way to launder a hop to somebody
+// else's. Only a path on this site is allowed through —
+//
+//   "/leaderboard"      ok
+//   "//evil.com"        no, protocol-relative
+//   "/\evil.com"        no, browsers normalise the backslash and follow it
+//   "https://evil.com"  no, absolute
+//   "/api/auth/login"   no, it would bounce straight back into the login flow
+//
+// — and anything else falls back to the front page, which is where this landed
+// before returnTo existed.
+const RETURN_MAX = 512;
+
+function safeReturnTo(raw) {
+  if (typeof raw !== 'string') return null;
+  if (raw.length === 0 || raw.length > RETURN_MAX) return null;
+  if (raw[0] !== '/') return null;
+  if (raw[1] === '/' || raw[1] === '\\') return null;
+  // Control characters, including the newline that would split a header.
+  if (/[\x00-\x1f\x7f]/.test(raw)) return null;
+  // Never back into the flow itself — that IS the loop this exists to end.
+  if (/^\/api(\/|$)/i.test(raw)) return null;
+  return raw;
+}
 
 // How stale a session may get before it's re-checked against Discord. Someone
 // who leaves the server loses access within this window instead of riding out
@@ -116,6 +154,15 @@ router.get('/login', (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
   res.cookie(STATE_COOKIE, state, { ...baseCookie, maxAge: 10 * 60 * 1000 });
 
+  // Ride along in a cookie rather than in the `state` parameter: state is
+  // echoed by Discord and compared for equality, and widening it into a
+  // structure that also carries a destination makes the CSRF check the place a
+  // redirect target gets parsed. Same lifetime — a login left open for longer
+  // than ten minutes has bigger problems than landing on the front page.
+  const returnTo = safeReturnTo(req.query.returnTo);
+  if (returnTo) res.cookie(RETURN_COOKIE, returnTo, { ...baseCookie, maxAge: 10 * 60 * 1000 });
+  else res.clearCookie(RETURN_COOKIE, baseCookie);
+
   const params = new URLSearchParams({
     client_id: DISCORD_CLIENT_ID,
     redirect_uri: DISCORD_REDIRECT_URI,
@@ -138,8 +185,14 @@ router.get('/discord/callback', async (req, res) => {
   const savedState = req.cookies?.[STATE_COOKIE];
   res.clearCookie(STATE_COOKIE, baseCookie);
 
+  // Re-validated on the way out, not just on the way in: the cookie is ours,
+  // but a rule that is only enforced at one end of a round trip is a rule that
+  // stops being enforced the moment somebody finds the other end.
+  const returnTo = safeReturnTo(req.cookies?.[RETURN_COOKIE]) || '/';
+  res.clearCookie(RETURN_COOKIE, baseCookie);
+
   if (!code || !state || state !== savedState) {
-    return res.redirect(`${APP_URL}?auth=error`);
+    return res.redirect(appUrl('/?auth=error'));
   }
 
   try {
@@ -167,7 +220,7 @@ router.get('/discord/callback', async (req, res) => {
       // for the organizer who set it up and nobody else usually means the ID
       // points at a server only they are in.
       console.warn(`Login refused: user is not a member of guild ${DISCORD_GUILD_ID} (auth=not_member)`);
-      return res.redirect(`${APP_URL}?auth=not_member`);
+      return res.redirect(appUrl('/?auth=not_member'));
     }
     if (memberRes.status !== 200) throw new Error(`member fetch failed: ${memberRes.status}`);
 
@@ -185,7 +238,7 @@ router.get('/discord/callback', async (req, res) => {
             + 'a successful login, so nobody will ever pass. Empty DISCORD_ALLOWED_ROLE_IDS.'
           : 'Leave DISCORD_ALLOWED_ROLE_IDS empty to let any member of the server sign in.')
       );
-      return res.redirect(`${APP_URL}?auth=forbidden`);
+      return res.redirect(appUrl('/?auth=forbidden'));
     }
 
     // Mark them verified in Discord. Deliberately AFTER the access check —
@@ -196,14 +249,16 @@ router.get('/discord/callback', async (req, res) => {
     if (VERIFIED_ROLE_ID) await addRole(sessionUser.id, VERIFIED_ROLE_ID);
 
     issueSession(res, sessionUser);
-    res.redirect(APP_URL);
+    // Back where they were going, which for most people is the gated page they
+    // clicked in Discord rather than the front page.
+    res.redirect(appUrl(returnTo));
   } catch (err) {
     // Nearly always one of three things, and the raw message rarely says which.
     const hint = /invalid_grant|invalid_client|redirect_uri/i.test(err.message || '')
       ? ' — check DISCORD_REDIRECT_URI matches the redirect registered on the Discord application, exactly'
       : '';
     console.error(`Auth callback error (auth=error): ${err.message}${hint}`);
-    res.redirect(`${APP_URL}?auth=error`);
+    res.redirect(appUrl('/?auth=error'));
   }
 });
 
@@ -345,4 +400,4 @@ function requireOrganizer(req, res, next) {
   });
 }
 
-module.exports = { router, requireAuth, requireOrganizer, authConfigured };
+module.exports = { router, requireAuth, requireOrganizer, authConfigured, safeReturnTo, appUrl };
