@@ -294,7 +294,18 @@ async function bracketState(tournamentId) {
     : [];
 
   return {
-    exists: rows.length > 0,
+    // A BRACKET, not "any match at all". The seeding stage is matches too, and
+    // counting it here said a bracket existed the moment the round robin was
+    // drawn — with the seeding results then reading as bracket results, so
+    // `canGenerate` went false and the button that draws the bracket turned
+    // into a disabled "Redraw bracket" before the bracket had ever been drawn.
+    //
+    // /generate already draws this line for itself: its "already played" check
+    // filters `bracket !== 'RR'` with a comment saying that counting them would
+    // refuse every bracket it exists to allow. The route was right and this was
+    // not, so the server would have accepted a click the page would not let
+    // anybody make.
+    exists: rows.some((r) => r.bracket !== 'RR'),
     winnersRounds,
     losersRounds,
     seedingRounds,
@@ -314,7 +325,12 @@ async function bracketState(tournamentId) {
     // unconditionally, a finished tournament read "10 of 11 played" forever,
     // with the missing one being a match that was never going to happen.
     counts: (() => {
-      const live = matches.filter((m) => m.kind === 'match' && (!m.is_reset || m.team_a_id));
+      // Bracket fixtures only, for the same reason `exists` is. The seeding
+      // stage has its own totals under `seeding` above, and folding it in here
+      // made the header read "6 of 6 played" for a bracket with no matches in
+      // it — and fed `canGenerate`, which is what actually blocked the draw.
+      const live = matches.filter((m) => m.bracket !== 'RR'
+        && m.kind === 'match' && (!m.is_reset || m.team_a_id));
       return {
         total: live.length,
         complete: live.filter((m) => m.status === 'complete').length,
