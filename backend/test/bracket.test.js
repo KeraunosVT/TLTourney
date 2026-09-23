@@ -15,7 +15,7 @@ const assert = require('node:assert');
 
 const {
   generateBracket, generateRoundRobin, applyResult, seedOrder, bracketSize,
-  roundLabel, columns, winnersSide,
+  roundLabel, columns, winnersSide, grandFinalBestOf, GRAND_FINAL_BEST_OF,
 } = require('../../shared/bracket.cjs');
 
 // ── A tournament, played out ────────────────────────────────────────────────
@@ -439,3 +439,45 @@ test('a bracket rebuilt from stored slot sources behaves identically', () => {
     }
   }
 });
+
+// ── How long is the final, really? ──────────────────────────────────────────
+// The generator's constant and the row in the database are two different
+// answers, and the pages that tell viewers the format must use the second one.
+// Season 2 is the case that proves it: drawn at bo5, played at bo3.
+test('the grand final length comes from the row, not the constant', () => {
+  const b = generateBracket(4);
+  // As drawn, the two agree.
+  assert.strictEqual(grandFinalBestOf(b.matches.map(toRow)), GRAND_FINAL_BEST_OF);
+
+  // An organizer shortens it. The constant has not moved; the answer must.
+  const shortened = b.matches.map(toRow)
+    .map((m) => (m.bracket === 'GF' ? { ...m, best_of: 3 } : m));
+  assert.strictEqual(grandFinalBestOf(shortened), 3);
+  assert.strictEqual(GRAND_FINAL_BEST_OF, 5, 'the generator default is unchanged');
+});
+
+test('a reset row is not mistaken for the final', () => {
+  // Brackets drawn before 026 carry a GF2-0. The length being asked about is
+  // the final people are going to watch, not the reset that may never happen.
+  const rows = [
+    { key: 'GF1-0', bracket: 'GF', round: 1, best_of: 3 },
+    { key: 'GF2-0', bracket: 'GF', round: 2, best_of: 5, is_reset: true },
+  ];
+  assert.strictEqual(grandFinalBestOf(rows), 3);
+  assert.strictEqual(grandFinalBestOf([...rows].reverse()), 3, 'order must not decide it');
+});
+
+test('no bracket yet is null, never a number the page would print', () => {
+  // The header leaves the length out of the sentence rather than saying
+  // "best of null" or, worse, defaulting to a number nothing has decided.
+  assert.strictEqual(grandFinalBestOf([]), null);
+  assert.strictEqual(grandFinalBestOf(null), null);
+  assert.strictEqual(grandFinalBestOf(undefined), null);
+  assert.strictEqual(grandFinalBestOf([{ key: 'W1-0', bracket: 'W', best_of: 3 }]), null);
+});
+
+// The engine speaks camelCase and the database speaks snake_case; the helper
+// reads rows that came back out of the database.
+function toRow(m) {
+  return { ...m, best_of: m.bestOf ?? 3, is_reset: !!m.reset };
+}

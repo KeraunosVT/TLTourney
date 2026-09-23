@@ -754,16 +754,42 @@ select '026 · the seeding stage, if drawn, is every pair exactly once',
            from tournaments o where o.status <> 'complete'
           order by o.created_at limit 1), true)
 union all
-select '026 · the drawn bracket uses the NEW final (bo5, no reset) — false means it predates 026',
+-- Split in two, because the two halves fail for completely different reasons
+-- and used to be reported as one line. STRUCTURE is what 026 changed: one grand
+-- final, no reset match. LENGTH is a policy an organizer may change at any time
+-- from the bracket page, and when it changed this row went false and announced
+-- that the bracket "predates 026" — which was not true and sent whoever read it
+-- looking for a migration problem that did not exist.
+select '026 · the drawn bracket uses the NEW final (single GF, no reset) — false means it predates 026',
        coalesce((
          select (select count(*) from matches m
                   where m.tournament_id = o.id and m.bracket = 'GF') in (0, 1)
             and not exists (select 1 from matches m
                              where m.tournament_id = o.id and m.key = 'GF2-0'
                                and m.kind <> 'void')
-            and not exists (select 1 from matches m
+           from tournaments o where o.status <> 'complete'
+          order by o.created_at limit 1), true)
+union all
+-- ── The grand final's length ────────────────────────────────────────────────
+-- Season 2's final is a BEST OF 3, set by hand on 2026-09-23 against a bracket
+-- the generator drew at 5. shared/bracket.cjs still says GRAND_FINAL_BEST_OF =
+-- 5, deliberately — the change is this season's, not a new rule.
+--
+-- Which means REDRAWING THE BRACKET SILENTLY PUTS IT BACK TO 5. That is the
+-- failure this row exists to catch, and it is invisible everywhere else: the
+-- bracket page would quietly start calling it a best of 5 again and nobody
+-- would notice until a fourth game was being scheduled.
+--
+-- Pinned to 3 rather than loosened to "any odd number" on purpose. A check that
+-- accepts whatever it finds cannot tell a deliberate change from a redraw, and
+-- catching the redraw IS the point. When Season 2 ends, update this to whatever
+-- the next final is — or delete it and let GRAND_FINAL_BEST_OF speak, if the
+-- generator's default is put back in charge.
+select '026 · the grand final is a best of 3 — false means it was redrawn back to the generator''s bo5',
+       coalesce((
+         select not exists (select 1 from matches m
                              where m.tournament_id = o.id and m.bracket = 'GF'
-                               and m.best_of <> 5)
+                               and m.round <> 2 and m.best_of <> 3)
            from tournaments o where o.status <> 'complete'
           order by o.created_at limit 1), true)
 union all

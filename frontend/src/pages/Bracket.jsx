@@ -15,6 +15,7 @@ import api, { errorMessage } from '../api';
 import { Panel, Pill, Button, Note, Field } from '../components/ui';
 import { useAuth } from '../auth';
 import { whenShort } from '../lib/clock';
+import { grandFinalBestOf } from '@shared/bracket.cjs';
 
 export default function Bracket() {
   const { user } = useAuth();
@@ -96,6 +97,10 @@ export default function Bracket() {
   );
   const placeOf = places.size ? (id) => places.get(id) ?? null : null;
 
+  // Null until a bracket is drawn; the header leaves the number out rather
+  // than claiming a length nothing has decided yet.
+  const gfBestOf = grandFinalBestOf(state?.matches);
+
   return (
     <div className="px-6 py-7">
       <header className="flex items-end justify-between gap-5 flex-wrap mb-4 max-w-[1400px]">
@@ -104,7 +109,13 @@ export default function Bracket() {
           <p className="text-ash text-sm mt-1.5 max-w-[70ch]">
             A seeding stage first — every team plays every other once — and the table it
             produces seeds a double-elimination bracket. A team is out on its second loss.
-            The grand final is a single best-of-five: no reset, so it ends when it ends.
+            {/* Read off the drawn bracket, not written in. This sentence said
+                "best-of-five" for as long as the generator's default went
+                unchanged, and would have gone on saying it to every viewer the
+                moment an organizer shortened the final. */}
+            {gfBestOf
+              ? ` The grand final is a single best of ${gfBestOf}: no reset, so it ends when it ends.`
+              : ' The grand final is a single series: no reset, so it ends when it ends.'}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

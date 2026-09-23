@@ -27,6 +27,7 @@ import AuthNotice, { authReason } from '../components/AuthNotice';
 import { DISCORD_INVITE } from '../lib/discord';
 import { useCountdown, mmss, whenLocal, countdownLabel } from '../lib/clock';
 import { pollMs, bracketPollMs } from '../lib/stream';
+import { grandFinalBestOf } from '@shared/bracket.cjs';
 
 export default function Home() {
   const [t, setT] = useState(null);
@@ -89,7 +90,7 @@ export default function Home() {
         <Watch t={t} />
         <Standings bracket={bracket} />
         <Explore t={t} />
-        <Format t={t} />
+        <Format t={t} bracket={bracket} />
         <Footer />
       </div>
     </div>
@@ -442,11 +443,15 @@ function Explore({ t }) {
   );
 }
 
-function Format({ t }) {
+function Format({ t, bracket }) {
   const size = t?.roster_size || 66;
   const parties = t?.party_count || 8;
   const per = t?.party_size || 6;
   const subs = t?.sub_count ?? 18;
+  // The drawn bracket's own answer. This card is the first thing a viewer
+  // reads about the format, so a stale "best-of-five" here is the version
+  // that spreads.
+  const gfBestOf = grandFinalBestOf(bracket?.matches);
 
   return (
     <section>
@@ -461,7 +466,7 @@ function Format({ t }) {
         </Card>
         <Card title="Seed, then knock out">
           Every team plays every other once. That table seeds a double-elimination
-          bracket, and the final is a single best-of-five.
+          bracket{gfBestOf ? `, and the final is a single best of ${gfBestOf}` : ''}.
         </Card>
       </div>
     </section>

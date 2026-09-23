@@ -45,6 +45,30 @@ const GRAND_FINAL_BEST_OF = 5;
 // (see fromEngine in backend/bracket.js), so every row has to say it.
 const DEFAULT_BEST_OF = 3;
 
+/**
+ * How long IS the grand final, according to the bracket that was actually drawn?
+ *
+ * GRAND_FINAL_BEST_OF is what the generator writes; this is what the row says
+ * now. They part company the moment an organizer changes a series length
+ * (PUT /api/organizer/bracket/best-of), and Season 2's final is exactly that
+ * case — drawn at 5, set to 3 by hand.
+ *
+ * Pages asking "how long is the final" must ask the ROW. Two of them used to
+ * state "best-of-five" as prose, which was true when it was written and became
+ * a page confidently telling viewers the wrong format the day it was changed.
+ *
+ * Null when no bracket is drawn yet, so a caller can leave the number out of
+ * the sentence rather than print "best of null".
+ */
+function grandFinalBestOf(matches) {
+  // Skip a reset row: brackets drawn before 026 carry a GF2-0, and the length
+  // being asked about is the one on the final people are going to watch.
+  const gf = (matches || []).find(
+    (m) => m.bracket === 'GF' && m.round !== 2 && !m.is_reset && !m.reset
+  );
+  return gf?.best_of ?? null;
+}
+
 // A seeding fixture is a SINGLE GAME. Six fixtures at best-of-three is
 // eighteen games to decide a seeding order, which is more play than the
 // double-elimination bracket those seeds feed into. One game each keeps the
@@ -547,5 +571,6 @@ function columns(matches, bracket) {
 module.exports = {
   generateBracket, generateRoundRobin, roundRobinStandings,
   applyResult, seedOrder, bracketSize, roundLabel, columns, winnersSide,
+  grandFinalBestOf,
   GRAND_FINAL_BEST_OF, SEEDING_BEST_OF, DEFAULT_BEST_OF, SEED, WINNER, LOSER, keyFor,
 };
