@@ -12,7 +12,7 @@ const multer = require('multer');
 const { supabase, currentTournament, audit } = require('./db');
 const {
   generateBracket, generateRoundRobin, roundRobinStandings, applyResult, roundLabel,
-  DEFAULT_BEST_OF, opponentIn, forfeitProblem, forfeitReasonProblem,
+  DEFAULT_BEST_OF, opponentIn, forfeitProblem, forfeitReasonProblem, slotBackfills,
 } = require('../shared/bracket.cjs');
 const { seriesResult, gameSlots, isBestOf, toWin } = require('../shared/series.cjs');
 const { isMap, available, isPlayable, banList, banProblem } = require('../shared/maps.cjs');
@@ -196,6 +196,19 @@ async function settle(tournamentId) {
       patches.set(key, { ...(patches.get(key) || {}), ...fields });
       Object.assign(byKey.get(key), fields);
     };
+
+    // Put back any team whose slot was emptied by an unwind that was not about
+    // them. Both unwind paths blank a downstream match's two slots to clear out
+    // the team that advanced on the undone result, which also throws away the
+    // other side — fed by a match still sitting there complete. See
+    // slotBackfills for why this is answered from the wiring rather than by
+    // making those two paths clear more carefully.
+    //
+    // First in the pass, so a match made whole again is marked ready by the
+    // loop below without waiting for another one.
+    for (const w of slotBackfills(rows)) {
+      patch(w.key, { [`team_${w.slot}_id`]: w.teamId });
+    }
 
     for (const r of rows) {
       if (r.status === 'complete') continue;

@@ -582,6 +582,66 @@ function applyResult(matches, key, winnerId) {
   };
 }
 
+/**
+ * Slots whose team is missing, but whose feeder has already finished.
+ *
+ * The counterpart to applyResult, and it exists because that function only
+ * moves FORWARDS. It advances teams at the moment a result is recorded, which
+ * is enough until something moves backwards — and two things do. unwind() and
+ * the undo route both clear every match downstream of the result coming off,
+ * and both blank BOTH slots of each one, because a team that advanced on that
+ * result may already be sitting two rounds along.
+ *
+ * Both slots is one too many. A downstream match is generally fed by two
+ * DIFFERENT matches and only one of them is being undone; the other is still
+ * complete, and its winner still belongs exactly where it was. The grand final
+ * is where that bites, being the one match fed from both brackets: undoing the
+ * losers final empties the winners finalist out of it as well, and nothing has
+ * ever put them back — the bracket sits there with a half-populated grand
+ * final and no way to reach it short of redrawing.
+ *
+ * Reading the slot's own source is the repair, rather than making the two
+ * unwind paths clear their slots more carefully. The slot already SAYS where
+ * its team comes from, so "is this bracket consistent with its own wiring" is
+ * a question answerable from the rows at any moment — which makes this
+ * self-healing on the next settle, including for a bracket already left in
+ * that state before this existed.
+ *
+ * Pure. Takes database-shaped rows (slot_a/slot_b, team_a_id/team_b_id) and
+ * returns applyResult's write shape: [{ key, slot, teamId }].
+ */
+function slotBackfills(rows) {
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  const writes = [];
+
+  for (const r of rows) {
+    // A finished match already has both its teams, and a void one is never
+    // played. Neither is waiting on anybody.
+    if (r.status === 'complete' || r.kind === 'void') continue;
+
+    for (const slot of ['a', 'b']) {
+      if (r[`team_${slot}_id`]) continue;
+
+      // A seed slot names a team directly and is placed at generation; only a
+      // slot fed by another match can be restored from one.
+      const src = r[`slot_${slot}`];
+      if (!src?.of) continue;
+
+      const feeder = byKey.get(src.of);
+      if (!feeder || feeder.status !== 'complete') continue;
+
+      // A walkover has a winner and no loser, so a loser slot fed by one stays
+      // empty — which is what a bye means: nobody dropped out of it.
+      const teamId = src.type === 'winner' ? feeder.winner_team_id
+        : src.type === 'loser' ? feeder.loser_team_id
+          : null;
+      if (teamId) writes.push({ key: r.key, slot, teamId });
+    }
+  }
+
+  return writes;
+}
+
 // ── Naming ──────────────────────────────────────────────────────────────────
 /**
  * What to call a match on screen.
@@ -621,7 +681,7 @@ function columns(matches, bracket) {
 
 module.exports = {
   generateBracket, generateRoundRobin, roundRobinStandings,
-  applyResult, seedOrder, bracketSize, roundLabel, columns, winnersSide,
+  applyResult, slotBackfills, seedOrder, bracketSize, roundLabel, columns, winnersSide,
   grandFinalBestOf, opponentIn, forfeitProblem, forfeitReasonProblem,
   GRAND_FINAL_BEST_OF, SEEDING_BEST_OF, DEFAULT_BEST_OF, SEED, WINNER, LOSER, keyFor,
 };
