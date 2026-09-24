@@ -344,6 +344,16 @@ function MatchCard({ m, onPick, canRecord, busy, placeOf }) {
           <span className="text-[9.5px] text-ash whitespace-nowrap">{whenShort(m.scheduled_at)}</span>
         )}
         {m.kind === 'walkover' && <span className="text-[9px] uppercase tracking-[0.1em] text-ash">bye</span>}
+        {/* Otherwise this card is a clean win with an empty scoresheet behind
+            it, and the only way to find out why is to ask somebody. */}
+        {m.forfeit && (
+          <span
+            className="text-[9px] uppercase tracking-[0.1em] text-oxblood whitespace-nowrap"
+            title={`${m.forfeit.team?.name || 'A team'} forfeited — ${m.forfeit.why}`}
+          >
+            forfeit
+          </span>
+        )}
         {m.status === 'ready' && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">ready</span>}
         {m.is_reset && !dormant && <span className="text-[9px] uppercase tracking-[0.1em] text-crimsonbright">reset</span>}
         {/* A marker, not a block. Visible from the bracket so nobody has to

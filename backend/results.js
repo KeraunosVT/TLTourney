@@ -139,7 +139,19 @@ router.get('/match/:key', async (req, res) => {
   if (!t) return res.json({ match: null, rows: [] });
 
   const { data: match } = await supabase.from('matches')
-    .select('id, key, bracket, round, idx, best_of, team_a_id, team_b_id, winner_team_id, status, scoreboard_at, bans_a, bans_b')
+    .select('id, key, bracket, round, idx, best_of, team_a_id, team_b_id, winner_team_id, '
+      // `kind` so the page can tell a bye and a void match from a real fixture
+      // — the forfeit control refuses both, and it needs to say which.
+      + 'status, kind, scoreboard_at, bans_a, bans_b, '
+      // scheduled_at was MISSING, and the match page has a scheduling panel.
+      // It read match.scheduled_at off a row that never carried it, so the box
+      // opened blank however many times a time had been set, the header never
+      // showed one, and "Clear" never appeared. The write went to
+      // /api/organizer/bracket/schedule and landed correctly — only the read
+      // back was absent, which is why it looked like the save silently failed.
+      + 'scheduled_at, '
+      // 036.
+      + 'forfeit_team_id, forfeit_why, forfeit_at, forfeit_by')
     .eq('tournament_id', t.id).eq('key', req.params.key).maybeSingle();
   if (!match) return res.status(404).json({ error: 'No such match.' });
 
@@ -178,6 +190,16 @@ router.get('/match/:key', async (req, res) => {
       team_a: byId.get(match.team_a_id) || null,
       team_b: byId.get(match.team_b_id) || null,
       winner: byId.get(match.winner_team_id) || null,
+      // Resolved the same way bracketState resolves it, so both pages read one
+      // shape. Null on everything that was actually played.
+      forfeit: match.forfeit_team_id
+        ? {
+          team: byId.get(match.forfeit_team_id) || null,
+          why: match.forfeit_why,
+          at: match.forfeit_at,
+          by: match.forfeit_by,
+        }
+        : null,
     },
     series: seriesResult(games || [], match.best_of, match.team_a_id, match.team_b_id),
     maps: MAPS,

@@ -12,16 +12,19 @@ const multer = require('multer');
 const { supabase, currentTournament, audit } = require('./db');
 const {
   generateBracket, generateRoundRobin, roundRobinStandings, applyResult, roundLabel,
-  DEFAULT_BEST_OF,
+  DEFAULT_BEST_OF, opponentIn, forfeitProblem, forfeitReasonProblem,
 } = require('../shared/bracket.cjs');
-const { seriesResult, gameSlots, isBestOf } = require('../shared/series.cjs');
+const { seriesResult, gameSlots, isBestOf, toWin } = require('../shared/series.cjs');
 const { isMap, available, isPlayable, banList, banProblem } = require('../shared/maps.cjs');
 const { classify } = require('../shared/classes.cjs');
 const { splitFromCounts } = require('../shared/predictions.cjs');
 
 const COLS = 'id, key, bracket, round, idx, slot_a, slot_b, team_a_id, team_b_id, '
   + 'winner_team_id, loser_team_id, kind, advances, status, is_reset, scheduled_at, '
-  + 'decided_at, decided_by, scoreboard_at, best_of, bans_a, bans_b';
+  + 'decided_at, decided_by, scoreboard_at, best_of, bans_a, bans_b, '
+  // 036. Read everywhere a match is drawn: a conceded series looks exactly like
+  // an abandoned one — a win with no maps — unless the row says which it is.
+  + 'forfeit_team_id, forfeit_why, forfeit_at, forfeit_by';
 
 const TEAM = 'id, name, tag, seed';
 
@@ -267,6 +270,17 @@ async function bracketState(tournamentId) {
         team_a: byId.get(r.team_a_id) || null,
         team_b: byId.get(r.team_b_id) || null,
         winner: byId.get(r.winner_team_id) || null,
+        // 036. Resolved to the team the same way the sides are, so a card can
+        // name who conceded without a second lookup — and null on every match
+        // that was actually played, which is almost all of them.
+        forfeit: r.forfeit_team_id
+          ? {
+            team: byId.get(r.forfeit_team_id) || null,
+            why: r.forfeit_why,
+            at: r.forfeit_at,
+            by: r.forfeit_by,
+          }
+          : null,
         games,
         series: seriesResult(games, r.best_of, r.team_a_id, r.team_b_id),
         // Attached BY TEAM, surfaced by side, because that is how the card is
@@ -933,6 +947,11 @@ async function unwind(tournamentId, rows, key) {
     const { error } = await supabase.from('matches').update({
       winner_team_id: null, loser_team_id: null, status: 'pending',
       decided_at: null, decided_by: null,
+      // 036's forfeit columns are deliberately NOT cleared here. This unwinds a
+      // result so recompute can restate it from the games, which are still
+      // there — a forfeited match unwound by this path decides as a forfeit
+      // again, and it must still be able to say so. /undo is the one that
+      // deletes the games, and that is where the note is cleared.
       // The match itself keeps its teams; everything after it loses them,
       // because those teams only got there because of the result being undone.
       ...(isSelf ? {} : { team_a_id: null, team_b_id: null }),
@@ -1285,7 +1304,6 @@ organizerRouter.post('/result', async (req, res) => {
   // a bracket that disagrees with its own scoresheet. A forfeit is the whole
   // series conceded, so it is exactly the games it takes to win one, with no
   // map on any of them — nothing was played.
-  const { toWin } = require('../shared/series.cjs');
   const need = toWin(match.best_of);
   const games = Array.from({ length: need }, (_, i) => ({
     tournament_id: t.id,
@@ -1307,6 +1325,98 @@ organizerRouter.post('/result', async (req, res) => {
   if (out.error) return res.status(out.code || 500).json({ error: out.error });
 
   await audit(req.user, 'bracket.result', key, { winner: winnerId, awarded: true, games: need });
+  res.json({
+    ok: true,
+    reset: out.result?.reset,
+    champion: out.result?.champion,
+    eliminated: out.result?.eliminated,
+    ...(await bracketState(t.id)),
+  });
+});
+
+/**
+ * Forfeit a match — name the team that CONCEDED, not the team that won.
+ *
+ * The inverse of /result above, and deliberately a separate route rather than a
+ * flag on it. The two are asked in opposite directions: recording a result
+ * names the winner, forfeiting names the side that pulled out. An organizer
+ * doing this at 1am because a roster fell apart should say the thing they know
+ * — "Crimson Tide didn't turn up" — and not have to invert it into a statement
+ * about the other team first. The database refuses the inversion too
+ * (matches_forfeit_not_winner), so a slip here cannot advance the team that
+ * conceded.
+ *
+ * The result itself is written exactly as /result writes it: the games it takes
+ * to win the series, no map on any of them, because nothing was played. What is
+ * new is that the row now says it was a forfeit and why, instead of leaving a
+ * mapless 2–0 to be interpreted.
+ *
+ * Deliberately ONE MATCH. A team that has withdrawn from the tournament
+ * entirely will need this again when their next match becomes ready — settle()
+ * only marks a match ready once both teams are known, so there is no honest way
+ * to forfeit a team out of a bracket in a single action.
+ */
+organizerRouter.post('/forfeit', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database not configured.' });
+  const t = await currentTournament();
+  if (!t) return res.status(409).json({ error: 'No tournament is running.' });
+
+  const key = String(req.body?.key || '');
+  const teamId = req.body?.team_id;
+  const why = String(req.body?.why ?? '').trim();
+
+  const reasonBad = forfeitReasonProblem(why);
+  if (reasonBad) return res.status(400).json({ error: reasonBad });
+
+  const { data: match } = await supabase.from('matches')
+    .select('id, key, best_of, team_a_id, team_b_id, status, kind')
+    .eq('tournament_id', t.id).eq('key', key).maybeSingle();
+
+  // Every refusal in one place, and in a function a test can reach without a
+  // database standing behind it.
+  const problem = forfeitProblem({ match, teamId });
+  if (problem) return res.status(match ? 409 : 404).json({ error: problem });
+
+  const winnerId = opponentIn(match, teamId);
+  const need = toWin(match.best_of);
+  const now = new Date().toISOString();
+  const by = req.user?.username || 'organizer';
+
+  const games = Array.from({ length: need }, (_, i) => ({
+    tournament_id: t.id,
+    match_id: match.id,
+    game_number: i + 1,
+    winner_team_id: winnerId,
+    decided_at: now,
+    decided_by: `${by} (forfeit)`,
+  }));
+
+  const { error: gErr } = await supabase.from('match_games')
+    .upsert(games, { onConflict: 'match_id,game_number' });
+  if (gErr) {
+    console.error('forfeit games write failed:', gErr.message);
+    return res.status(500).json({ error: 'Could not record that forfeit.' });
+  }
+
+  // The four forfeit columns travel together — the CHECK in 036 enforces it, so
+  // a partial write here is refused rather than stored.
+  const { error: mErr } = await supabase.from('matches').update({
+    forfeit_team_id: teamId, forfeit_why: why, forfeit_at: now, forfeit_by: by,
+  }).eq('tournament_id', t.id).eq('key', key);
+  if (mErr) {
+    // The games are already in. Say so plainly rather than reporting a clean
+    // failure over a half-written one — the series will still decide, it just
+    // will not say why, and the organizer needs to know to look.
+    console.error('forfeit mark failed:', mErr.message);
+    return res.status(500).json({
+      error: 'The result was recorded but the forfeit note was not — reload and check the match.',
+    });
+  }
+
+  const out = await recompute(t, key, by);
+  if (out.error) return res.status(out.code || 500).json({ error: out.error });
+
+  await audit(req.user, 'bracket.forfeit', key, { forfeited_by: teamId, winner: winnerId, why, games: need });
   res.json({
     ok: true,
     reset: out.result?.reset,
@@ -1348,6 +1458,12 @@ organizerRouter.post('/undo', async (req, res) => {
     const { error } = await supabase.from('matches').update({
       winner_team_id: null, loser_team_id: null, status: 'pending',
       decided_at: null, decided_by: null,
+      // 036. Safe to clear here and NOT in unwind() above, and the difference
+      // is the games: this route deletes them a few lines down, so the match
+      // genuinely stops being a forfeit. unwind() leaves the games in place for
+      // recompute to read again, and clearing the note there would strip the
+      // reason off a match that is about to decide as a forfeit all over again.
+      forfeit_team_id: null, forfeit_why: null, forfeit_at: null, forfeit_by: null,
       // The undone match keeps its teams; everything after it loses them,
       // because those teams only got there because of the result being undone.
       ...(isLast ? {} : { team_a_id: null, team_b_id: null }),

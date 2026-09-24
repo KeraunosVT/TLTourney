@@ -41,6 +41,7 @@ const ACTION_LABELS = {
   'draft.reset': 'Draft reset',
   'bracket.generate': 'Bracket generated',
   'bracket.result': 'Match result recorded',
+  'bracket.forfeit': 'Match forfeited',
   'bracket.undo': 'Match result undone',
   'bracket.clear': 'Bracket cleared',
   'bracket.schedule': 'Match scheduled',

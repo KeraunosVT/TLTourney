@@ -69,6 +69,57 @@ function grandFinalBestOf(matches) {
   return gf?.best_of ?? null;
 }
 
+// ── Forfeits ────────────────────────────────────────────────────────────────
+/**
+ * The other side of a match.
+ *
+ * A forfeit names the team that CONCEDED and derives the winner, which is the
+ * opposite way round from recording a result. Worth one named function rather
+ * than a ternary at each call site: getting it backwards awards the match to
+ * the team that pulled out, and the bracket would carry them forward looking
+ * entirely correct.
+ */
+const opponentIn = (match, teamId) => (
+  match?.team_a_id === teamId ? match?.team_b_id : match?.team_a_id
+);
+
+/**
+ * May this team forfeit this match? Returns a sentence, or null.
+ *
+ * Shaped like pickProblem in shared/predictions.cjs, and here for the same
+ * reason: the rule is worth stating once, in a place a test can reach without
+ * a database, rather than as a run of guard clauses inside a route.
+ */
+function forfeitProblem({ match, teamId }) {
+  if (!match) return 'No such match in this bracket.';
+  if (!teamId) return 'Say which team is forfeiting.';
+  // A bye has one team and nobody to concede to; a void match is not played at
+  // all. Neither is a thing that can be forfeited, and both would otherwise
+  // write a result onto a row the bracket does not expect one from.
+  if (match.kind === 'walkover') return 'That match is a bye — there is nobody to forfeit to.';
+  if (match.kind === 'void') return 'That match is not being played.';
+  if (match.status === 'complete') {
+    return 'That match already has a result — undo it first to change it.';
+  }
+  // Both sides must be known. Forfeiting into an empty slot would award the
+  // match to nobody, and the winner is what the rest of the bracket reads.
+  if (!match.team_a_id || !match.team_b_id) {
+    return 'Both teams have to be decided before one can forfeit.';
+  }
+  if (![match.team_a_id, match.team_b_id].includes(teamId)) {
+    return 'That team is not in this match.';
+  }
+  return null;
+}
+
+/** A forfeit has to say why. Returns a sentence, or null. */
+function forfeitReasonProblem(why) {
+  const s = String(why ?? '').trim();
+  if (!s) return 'Say why the match was forfeited — it goes on the record.';
+  if (s.length > 200) return 'Keep the reason under 200 characters.';
+  return null;
+}
+
 // A seeding fixture is a SINGLE GAME. Six fixtures at best-of-three is
 // eighteen games to decide a seeding order, which is more play than the
 // double-elimination bracket those seeds feed into. One game each keeps the
@@ -571,6 +622,6 @@ function columns(matches, bracket) {
 module.exports = {
   generateBracket, generateRoundRobin, roundRobinStandings,
   applyResult, seedOrder, bracketSize, roundLabel, columns, winnersSide,
-  grandFinalBestOf,
+  grandFinalBestOf, opponentIn, forfeitProblem, forfeitReasonProblem,
   GRAND_FINAL_BEST_OF, SEEDING_BEST_OF, DEFAULT_BEST_OF, SEED, WINNER, LOSER, keyFor,
 };

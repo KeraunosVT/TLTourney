@@ -213,6 +213,25 @@ export default function Match() {
     }
   }
 
+  // Names the team that CONCEDED. The server derives the winner and the
+  // database refuses a forfeit by the winning team, so the one dangerous
+  // mistake here — saying the wrong name at 1am — cannot be stored.
+  async function forfeit(teamId, why) {
+    setBanner(null);
+    try {
+      const { data: d } = await api.post('/api/organizer/bracket/forfeit', { key, team_id: teamId, why });
+      setBanner({
+        tone: 'good',
+        text: d.champion
+          ? 'Recorded — and that decides the tournament.'
+          : 'Forfeit recorded. The bracket has moved on.',
+      });
+      load();
+    } catch (err) {
+      setBanner({ tone: 'bad', text: errorMessage(err) });
+    }
+  }
+
   const patch = (i, fields) => setReview((prev) => ({
     ...prev,
     rows: prev.rows.map((r, n) => (n === i ? { ...r, ...fields } : r)),
@@ -286,6 +305,9 @@ export default function Match() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Before the winner pill, because it changes what "won" means here —
+              nothing was played. */}
+          {m.forfeit && <Pill tone="bad">{m.forfeit.team?.name || 'a team'} forfeited</Pill>}
           {m.winner && <Pill tone="good">{m.winner.name} won</Pill>}
           {m.scoreboard_at
             ? <Pill tone="quiet">scoreboard saved</Pill>
@@ -301,7 +323,25 @@ export default function Match() {
 
       {banner && <div className="mb-4 max-w-[900px]"><Note tone={banner.tone}>{banner.text}</Note></div>}
 
+      {/* Shown to EVERYONE, not just organizers. A mapless 2–0 on a public
+          match page is the thing people ask about, and the answer should be on
+          the page rather than in Discord. */}
+      {m.forfeit && (
+        <div className="mb-4 max-w-[900px]">
+          <Note tone="bad">
+            <span className="font-semibold">{m.forfeit.team?.name || 'A team'} forfeited this match.</span>{' '}
+            {m.forfeit.why}
+            <span className="block text-[11px] text-ash/80 mt-1">
+              Recorded by {m.forfeit.by}
+              {m.forfeit.at && ` · ${whenLocal(m.forfeit.at)}`} · no games were played.
+            </span>
+          </Note>
+        </div>
+      )}
+
       {canEdit && <Schedule match={m} onSave={saveSchedule} />}
+
+      {canEdit && !m.forfeit && <Forfeit match={m} onForfeit={forfeit} />}
 
       <Weapons match={m} canEdit={canEdit} onDone={load} setBanner={setBanner} />
 
@@ -1302,6 +1342,104 @@ function Weapons({ match, canEdit, onDone, setBanner }) {
             )}
           </div>
         ))}
+      </div>
+    </Panel>
+  );
+}
+
+// ── Forfeit ─────────────────────────────────────────────────────────────────
+// Names the team that PULLED OUT, which is the opposite of how the bracket
+// page records a result — there you click the winner.
+//
+// That inversion is deliberate. An organizer reaching for this knows one fact:
+// a team is not playing. Making them state it as "the other team won" is an
+// extra translation at exactly the moment nobody should be doing translations,
+// and it is the mistake that advances the wrong team through a bracket.
+//
+// Two steps, and the reason is required before the second one unlocks. This
+// writes a result that moves the bracket and cannot be taken back except
+// through undo, so it should not be one click away from a mis-aim.
+function Forfeit({ match, onForfeit }) {
+  const [teamId, setTeamId] = useState('');
+  const [why, setWhy] = useState('');
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const sides = [match.team_a, match.team_b].filter(Boolean);
+  const ready = match.status === 'ready' || (match.team_a_id && match.team_b_id
+    && match.status !== 'complete');
+
+  // Why this match cannot be forfeited, said plainly rather than by disabling a
+  // button and leaving somebody to guess.
+  const blocked = match.kind === 'walkover' ? 'This is a bye — there is nobody to forfeit to.'
+    : match.kind === 'void' ? 'This match is not being played.'
+      : match.status === 'complete' ? 'This match already has a result. Undo it first.'
+        : !ready ? 'Both teams have to be decided before one can forfeit.'
+          : null;
+
+  const reason = why.trim();
+  const canArm = !blocked && !!teamId && reason.length > 0 && reason.length <= 200;
+  const winner = sides.find((s) => s.id !== teamId);
+
+  async function go() {
+    setBusy(true);
+    try {
+      await onForfeit(teamId, reason);
+      setTeamId(''); setWhy(''); setArmed(false);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Panel title="Forfeit" subtitle="No games played — the series is conceded" className="mb-4 max-w-[560px]">
+      <div className="p-4 flex flex-col gap-2.5">
+        {blocked ? (
+          <p className="text-[12.5px] text-ash">{blocked}</p>
+        ) : (
+          <>
+            <select
+              className="field-input py-1.5 text-[13.5px]"
+              value={teamId}
+              onChange={(e) => { setTeamId(e.target.value); setArmed(false); }}
+            >
+              <option value="">— which team is forfeiting? —</option>
+              {sides.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+
+            <input
+              className="field-input py-1.5 text-[13.5px]"
+              placeholder="Why? e.g. did not turn up, roster withdrew"
+              maxLength={200}
+              value={why}
+              onChange={(e) => { setWhy(e.target.value); setArmed(false); }}
+            />
+
+            {/* Says what is about to happen, in the direction the bracket will
+                record it. The select asks who lost; this line confirms who
+                wins, which is the half that is easy to get wrong. */}
+            {teamId && winner && (
+              <p className="text-[12px] text-ash">
+                <span className="text-bone">{winner.name}</span> takes the series{' '}
+                {Math.floor(match.best_of / 2) + 1}—0, with no maps played.
+              </p>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant={armed ? 'danger' : 'ghost'}
+                disabled={busy || !canArm}
+                onClick={() => (armed ? go() : setArmed(true))}
+                onBlur={() => setArmed(false)}
+              >
+                {busy ? 'Recording…' : armed ? 'Confirm forfeit' : 'Forfeit'}
+              </Button>
+              {armed && (
+                <span className="text-[11.5px] text-crimsonbright">
+                  This moves the bracket. Undo is the only way back.
+                </span>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </Panel>
   );

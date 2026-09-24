@@ -561,6 +561,45 @@ select '035 · every corrected prediction names who corrected it',
                         and (to_jsonb(p)->>'corrected_by' is null
                           or to_jsonb(p)->>'corrected_why' is null))
 union all
+-- ── 036 ────────────────────────────────────────────────────────────────────
+select '036 · matches carries the forfeit columns',
+       (select count(*) = 4 from information_schema.columns
+         where table_schema = 'public' and table_name = 'matches'
+           and column_name in ('forfeit_team_id', 'forfeit_why', 'forfeit_at', 'forfeit_by'))
+union all
+select '036 · a forfeit cannot be recorded without a reason',
+       exists (select 1 from pg_constraint where conname = 'matches_forfeit_complete')
+union all
+-- The inversion check. The API takes the team that CONCEDED and derives the
+-- winner, which is the opposite direction from recording a result — so the one
+-- mistake worth a constraint is the two being the same team.
+select '036 · no match was forfeited by the team that won it',
+       exists (select 1 from pg_constraint where conname = 'matches_forfeit_not_winner')
+union all
+-- to_jsonb so this row still answers on a database where 036 has not been run,
+-- the same trick 035's rows above use.
+select '036 · every forfeit names a team, a reason and who recorded it',
+       not exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'matches'
+                     and column_name = 'forfeit_at')
+       or not exists (select 1 from matches m
+                      where to_jsonb(m)->>'forfeit_at' is not null
+                        and (to_jsonb(m)->>'forfeit_team_id' is null
+                          or to_jsonb(m)->>'forfeit_why' is null
+                          or to_jsonb(m)->>'forfeit_by' is null))
+union all
+-- A forfeited match must have a result. The forfeit writes the games that
+-- decide it, so one sitting there conceded but undecided means the games write
+-- landed and the recompute did not — the half-written state the route warns
+-- about, and the only one that needs a human.
+select '036 · every forfeited match was actually decided',
+       not exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'matches'
+                     and column_name = 'forfeit_at')
+       or not exists (select 1 from matches m
+                      where to_jsonb(m)->>'forfeit_at' is not null
+                        and m.winner_team_id is null)
+union all
 -- ── 017 ────────────────────────────────────────────────────────────────────
 select '017 · prediction_questions and question_answers exist',
        (select count(*) = 2 from information_schema.tables
